@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useMemo, useState} from "react";
 import {formatBytes, Q2Status, UploadFeedback, useUst} from "./UstProvider";
 import {
   APPLE_ENTITIES,
@@ -82,7 +82,7 @@ function UploadCard({item}: {item: (typeof uploads)[number]}) {
 
   return (
     <article
-      className={`wizardUpload ${item.source === "apple_sales" ? "optional" : ""} ${dragging ? "dragging" : ""}`}
+      className={`wizardUpload optional ${dragging ? "dragging" : ""}`}
       onDragEnter={(event) => {
         event.preventDefault();
         setDragging(true);
@@ -147,7 +147,6 @@ export default function CalculationWizard() {
     setRows,
     totals,
     reports,
-    missing,
     removeReport,
     downloadReport,
     downloadAllReports,
@@ -155,15 +154,8 @@ export default function CalculationWizard() {
     setAppodealManual,
   } = useUst();
   const [step, setStep] = useState(1);
-  const [autoMessage, setAutoMessage] = useState("");
   const [zipBusy, setZipBusy] = useState(false);
   const [zipMessage, setZipMessage] = useState("");
-  const autoAdvanced = useRef(false);
-  const requiredComplete =
-    missing.google.length === 0 &&
-    missing.apple_financial.length === 0 &&
-    missing.appodeal.length === 0 &&
-    missing.kalkuel.length === 0;
   const balance = values.kz000 + values.kz057 - values.kz060 - values.kz066;
   const appleEntityTotals = useMemo(() => {
     const months = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3];
@@ -206,18 +198,6 @@ export default function CalculationWizard() {
       ].sort(),
     [quarter, reports, year],
   );
-
-  useEffect(() => {
-    if (step !== 1 || !requiredComplete || autoAdvanced.current) return;
-    autoAdvanced.current = true;
-    setAutoMessage("Alle Pflichtdateien erkannt. Die Prüfung öffnet sich automatisch …");
-    const timer = window.setTimeout(() => {
-      setStep(2);
-      setAutoMessage("");
-      window.scrollTo({top: 0, behavior: "smooth"});
-    }, 850);
-    return () => window.clearTimeout(timer);
-  }, [requiredComplete, step]);
 
   function goTo(nextStep: number) {
     setStep(Math.max(1, Math.min(4, nextStep)));
@@ -263,9 +243,9 @@ export default function CalculationWizard() {
     <>
       <section className="wizardHero">
         <div>
-          <p className="eyebrow">Berechnungsassistent</p>
-          <h1>Hochladen. Prüfen. <em>Berechnen.</em></h1>
-          <p>Ein durchgehender Ablauf von den Originaldateien bis zu den finalen UVA- und ZM-Werten.</p>
+          <p className="eyebrow">Optionale Plattformimporte</p>
+          <h1>Automatisch auswerten, <em>wenn du willst.</em></h1>
+          <p>Google, Apple, Appodeal und Kalkül ergänzen die allgemeine Buchhaltung. Keine Quelle ist Voraussetzung, um Buchungen oder den Jahresabschluss zu verwenden.</p>
         </div>
         <div className="periodCompact">
           <label>
@@ -303,15 +283,14 @@ export default function CalculationWizard() {
             <div><span>1</span></div>
             <div>
               <p className="eyebrow">Originaldateien</p>
-              <h2>Alle Berichte an einem Ort hochladen</h2>
-              <p>Pflichtdateien werden direkt erkannt. Sobald alles vollständig ist, geht es automatisch zur Prüfung.</p>
+              <h2>Vorhandene Berichte hochladen</h2>
+              <p>Lade nur jene Quellen hoch, die du tatsächlich verwendest. Die Originaldateien bleiben lokal in deinem Browser.</p>
             </div>
           </div>
           <div className="wizardUploads">{uploads.map((item) => <UploadCard item={item} key={item.source} />)}</div>
-          {autoMessage && <p className="autoAdvance" aria-live="polite">✓ {autoMessage}</p>}
           <div className="inlineStatus">
             <div>
-              <b>{requiredComplete ? "Pflichtdateien vollständig" : "Noch nicht vollständig"}</b>
+              <b>Alle Datenquellen sind optional</b>
               <span>{reports.length} Dateien lokal gespeichert</span>
             </div>
             <button
@@ -347,12 +326,6 @@ export default function CalculationWizard() {
               Frühere Kontrollwerte werden nicht addiert.
             </span>
           </div>
-          {!requiredComplete && (
-            <div className="callout warningBox">
-              <b>Es fehlen noch Pflichtdateien</b>
-              <span>Du kannst zurückgehen und sie ergänzen oder mit den bereits vorhandenen Daten weiterarbeiten.</span>
-            </div>
-          )}
           <div className="reportSummary">
             <div className="reportSummaryHead">
               <h3>Erkannte Dateien</h3>

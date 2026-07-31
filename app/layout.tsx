@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import {UstProvider} from "./components/UstProvider";
+import {BookkeepingProvider} from "./components/BookkeepingProvider";
 import Shell from "./components/Shell";
 
 const geistSans = Geist({
@@ -15,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "USt-Assistent Österreich",
-  description: "Lern- und Rechenassistent für UVA und ZM österreichischer App-Entwickler.",
+  title: "Steuernrechner Österreich",
+  description: "Lokale Einnahmen-Ausgaben-Rechnung und Steuerübersicht für österreichische Einzelunternehmen.",
   other: {
     "codex-preview": "development",
   },
@@ -36,7 +37,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <UstProvider><Shell>{children}</Shell></UstProvider>
+        <UstProvider>
+          <BookkeepingProvider>
+            <Shell>{children}</Shell>
+          </BookkeepingProvider>
+        </UstProvider>
       </body>
     </html>
   );

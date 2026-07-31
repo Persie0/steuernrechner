@@ -52,7 +52,7 @@ type Ctx = Store & {
   removeReport: (id: string) => Promise<void>;
   downloadReport: (id: string) => Promise<void>;
   downloadAllReports: () => Promise<number>;
-  reset: () => Promise<void>;
+  reset: (skipConfirm?: boolean) => Promise<boolean>;
   loadQ2: () => void;
   totals: Contribution;
   missing: Record<Source, number[]>;
@@ -418,16 +418,17 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     return included;
   }
-  async function reset() {
+  async function reset(skipConfirm = false) {
     if (
-      !confirm(
+      !skipConfirm && !confirm(
         "Alle lokal gespeicherten Dateien und Eingaben dieses Assistenten löschen?",
       )
     )
-      return;
+      return false;
     await clearDb();
     localStorage.removeItem(LS);
     setS(initial);
+    return true;
   }
   function loadQ2() {
     setS((x) => ({
@@ -555,11 +556,11 @@ export function StoredNotice() {
 export function Q2Status() {
   const { missing } = useUst();
   const labels: Record<Source, string> = {
-    google: "Google Earnings",
+    google: "Google Earnings (optional)",
     apple_sales: "Apple Sales (optional)",
-    apple_financial: "Apple Financial (FD_)",
-    appodeal: "Appodeal",
-    kalkuel: "Kalkül",
+    apple_financial: "Apple Financial FD_ (optional)",
+    appodeal: "Appodeal (optional)",
+    kalkuel: "Kalkül (optional)",
   };
   return (
     <div className="statusList">
@@ -567,11 +568,9 @@ export function Q2Status() {
         <div key={k} className={missing[k].length ? "incomplete" : "complete"}>
           <b>{labels[k]}</b>
           <span>
-            {k === "apple_sales"
-              ? "Keine Pflichtdatei; nur Plausibilitätskontrolle"
-              : missing[k].length
-                ? `Fehlt: ${k === "kalkuel" ? "Q2-Export" : missing[k].map((m) => ["", "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"][m]).join(", ")}`
-                : "Vollständig erkannt"}
+            {missing[k].length
+              ? "Nicht importiert oder Zeitraum unvollständig – optional"
+              : "Für den Zeitraum erkannt"}
           </span>
         </div>
       ))}

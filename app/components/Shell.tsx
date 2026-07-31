@@ -3,23 +3,40 @@
 import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {StoredNotice, useUst} from "./UstProvider";
+import {useBooks} from "./BookkeepingProvider";
 
 const workflow = [
   {href: "/", label: "Übersicht"},
-  {href: "/berechnung", label: "Berechnung starten"},
-  {href: "/finanzonline", label: "XML & Abgabe"},
+  {href: "/kontakte", label: "Kunden & Lieferanten"},
+  {href: "/produkte", label: "Produkte & Leistungen"},
+  {href: "/dokumente", label: "Dokumente & Zahlungen"},
+  {href: "/buchungen", label: "Buchungen"},
+  {href: "/ki-import", label: "Gemini Belegimport"},
+  {href: "/berechnung", label: "Optionale Importe"},
+  {href: "/steuer", label: "Steuer-Auswertung"},
+  {href: "/jahresabschluss", label: "Jahresabschluss"},
+  {href: "/breakdown", label: "Berechnungsdetails"},
+  {href: "/finanzonline", label: "UVA/ZM · XML"},
+  {href: "/einstellungen", label: "Einstellungen & Backup"},
 ];
 const knowledge = [
-  {href: "/lernen", label: "Grundlagen"},
-  {href: "/google", label: "Google"},
-  {href: "/apple", label: "Apple"},
-  {href: "/appodeal", label: "Appodeal"},
-  {href: "/kalkuel", label: "Kalkül"},
+  {href: "/lernen", label: "Steuer-Grundlagen"},
+  {href: "/google", label: "Google-Import"},
+  {href: "/apple", label: "Apple-Import"},
+  {href: "/appodeal", label: "Appodeal-Import"},
 ];
 
 export default function Shell({children}: {children: React.ReactNode}) {
   const path = usePathname();
   const {reset} = useUst();
+  const {clearBooks} = useBooks();
+  async function resetAll() {
+    if (!confirm("Alle lokal gespeicherten Buchungen, Dateien und Einstellungen löschen?"))
+      return;
+    clearBooks();
+    localStorage.removeItem("steuernrechner-gemini-key-v1");
+    await reset(true);
+  }
   const navLink = (item: {href: string; label: string}) => (
     <Link
       className={path === item.href || (item.href === "/berechnung" && path === "/dateien") ? "active" : ""}
@@ -33,9 +50,9 @@ export default function Shell({children}: {children: React.ReactNode}) {
   return (
     <>
       <header className="topbar">
-        <Link href="/" className="brand"><span className="mark">§</span><span>USt-Assistent <b>Österreich</b></span></Link>
+        <Link href="/" className="brand"><span className="mark">§</span><span>Steuernrechner <b>Österreich</b></span></Link>
         <StoredNotice />
-        <button className="ghost danger" onClick={reset}>Lokale Daten löschen</button>
+        <button className="ghost danger" onClick={() => void resetAll()}>Lokale Daten löschen</button>
       </header>
       <div className="appFrame">
         <aside className="sidebar">
@@ -44,12 +61,12 @@ export default function Shell({children}: {children: React.ReactNode}) {
             {workflow.map(navLink)}
           </div>
           <div className="navGroup knowledgeGroup">
-            <p>WISSEN & QUELLEN</p>
+            <p>WISSEN & IMPORT-HILFE</p>
             {knowledge.map(navLink)}
           </div>
           <div className="localBox">
-            <b>Privat & lokal</b>
-            <span>Dateien bleiben in diesem Browser. Keine Übertragung an einen Server.</span>
+            <b>Lokal gespeichert</b>
+            <span>Buchhaltungsdaten bleiben in diesem Browser. Nur beim optionalen Gemini-Import wird der gewählte Beleg an Google gesendet.</span>
           </div>
         </aside>
         <div className="content">
