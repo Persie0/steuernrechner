@@ -102,6 +102,13 @@ export default function Jahresabschluss() {
     ]);
   }
 
+  function exportZmCheck() {
+    csvDownload(`ZM_Kontrolle_${year}.csv`, [
+      ["UID", "Bemessungsgrundlage exakt", "ZM-Eurobetrag"],
+      ...Object.entries(summary.zm).map(([uid, value]) => [uid, value.toFixed(2), String(Math.trunc(value))]),
+    ]);
+  }
+
   return (
     <>
       <section className="subHero">
@@ -140,7 +147,9 @@ export default function Jahresabschluss() {
             <button onClick={exportEa}>E/A- und E1a-Summen CSV</button>
             <button onClick={exportAssets}>Anlageverzeichnis CSV</button>
             <button onClick={exportU1Check}>U1-Jahreskontrolle CSV</button>
+            <button onClick={exportZmCheck}>ZM aus Buchungen CSV</button>
           </div>
+          {Object.keys(summary.zm).length>0&&<div className="statement"><p className="total"><span>EU-Kunden in ZM</span><b>{Object.keys(summary.zm).length}</b></p>{Object.entries(summary.zm).map(([uid,value])=><p key={uid}><span>{uid}</span><b>{money(value)}</b></p>)}</div>}
         </article>
         <article className="card">
           <div className="cardKicker">ABSCHLUSS-CHECKLISTE</div>

@@ -26,11 +26,14 @@ const empty = {
   category: "software" as CategoryId,
   net: 0,
   vat: 0,
+  currency: "EUR",
+  exchangeRate: 1,
   businessShare: 100,
   vatCase: "domestic" as VatCase,
   paid: true,
   asset: false,
   usefulLife: 3,
+  depreciationMethod: "linear" as "linear"|"degressive"|"optimized",
   firstUseDate: today,
   note: "",
 };
@@ -104,8 +107,10 @@ export default function Buchungen() {
           <label>Kategorie<select value={draft.category} onChange={(e) => setDraft({...draft, category: e.target.value as CategoryId})}>
             {allowedCategories.map(([id, item]) => <option value={id} key={id}>{item.label} · E1a {item.e1a}</option>)}
           </select></label>
-          <label>Netto €<input type="number" step="0.01" min="0" required value={draft.net || ""} onChange={(e) => setDraft({...draft, net: Number(e.target.value)})}/></label>
-          <label>USt €<input type="number" step="0.01" min="0" value={draft.vat || ""} disabled={draft.vatCase !== "domestic"} onChange={(e) => setDraft({...draft, vat: Number(e.target.value)})}/></label>
+          <label>Netto in Währung<input type="number" step="0.01" min="0" required value={draft.net || ""} onChange={(e) => setDraft({...draft, net: Number(e.target.value)})}/></label>
+          <label>USt in Währung<input type="number" step="0.01" min="0" value={draft.vat || ""} disabled={draft.vatCase !== "domestic"} onChange={(e) => setDraft({...draft, vat: Number(e.target.value)})}/></label>
+          <label>Währung<input maxLength={3} value={draft.currency} onChange={(e)=>setDraft({...draft,currency:e.target.value.toUpperCase()})}/></label>
+          {draft.currency!=="EUR"&&<label>EUR je Währungseinheit<input type="number" min="0.000001" step="0.000001" value={draft.exchangeRate} onChange={(e)=>setDraft({...draft,exchangeRate:Number(e.target.value)})}/></label>}
           <label>Betriebsanteil %<input type="number" min="0" max="100" value={draft.businessShare} disabled={draft.kind === "income"} onChange={(e) => setDraft({...draft, businessShare: Number(e.target.value)})}/></label>
           <label className="wide">Umsatzsteuerfall<select value={draft.vatCase} onChange={(e) => setDraft({...draft, vatCase: e.target.value as VatCase, vat: e.target.value === "domestic" ? draft.vat : 0})}>
             {(Object.entries(vatCaseLabels) as [VatCase, string][]).map(([id, label]) => <option value={id} key={id}>{label}</option>)}
@@ -117,7 +122,8 @@ export default function Buchungen() {
             {draft.asset && <div className="formGrid compact">
               <label>Inbetriebnahme<input type="date" value={draft.firstUseDate} onChange={(e) => setDraft({...draft, firstUseDate: e.target.value})}/></label>
               <label>Nutzungsdauer Jahre<input type="number" min="1" value={draft.usefulLife} onChange={(e) => setDraft({...draft, usefulLife: Number(e.target.value)})}/></label>
-              <p>{draft.net * draft.businessShare / 100 <= 1000 ? "Bis 1.000 € netto wird das Anlagegut als GWG sofort berücksichtigt." : "Die Seite berechnet lineare AfA; bei Inbetriebnahme ab Juli im ersten Jahr die halbe Jahres-AfA."}</p>
+              <label>AfA-Methode<select value={draft.depreciationMethod} onChange={(e)=>setDraft({...draft,depreciationMethod:e.target.value as "linear"|"degressive"|"optimized"})}><option value="linear">Linear</option><option value="degressive">Degressiv 30 %</option><option value="optimized">Optimiert · Wechsel zu linear</option></select></label>
+              <p>{draft.net * draft.businessShare / 100 <= 1000 ? "Bis 1.000 € netto wird das Anlagegut als GWG sofort berücksichtigt." : "Lineare oder degressive AfA mit Halbjahresregel; optimiert wechselt rechnerisch zum günstigeren linearen Restwert."}</p>
             </div>}
           </div>
         )}
@@ -138,8 +144,8 @@ export default function Buchungen() {
                 <span><b>{entry.description}</b><small>{entry.partner || "ohne Partner"} · {entry.vatCase}</small></span>
                 <span>{categories[entry.category].label}<small>E1a {categories[entry.category].e1a}</small></span>
                 <span className={entry.kind}>{entry.kind === "income" ? "+" : "−"} {money(entry.net * (entry.kind === "expense" ? entry.businessShare / 100 : 1))}</span>
-                <button className="statusToggle" onClick={() => updateEntry({...entry, paid: !entry.paid})}>{entry.paid ? "bezahlt" : "offen"}</button>
-                <button className="iconDanger" aria-label={`${entry.description} löschen`} onClick={() => removeEntry(entry.id)}>×</button>
+                {entry.source==="document"?<span className="statusToggle">automatisch</span>:<button className="statusToggle" onClick={() => updateEntry({...entry, paid: !entry.paid})}>{entry.paid ? "bezahlt" : "offen"}</button>}
+                {entry.source==="document"?<span/>:<button className="iconDanger" aria-label={`${entry.description} löschen`} onClick={() => removeEntry(entry.id)}>×</button>}
               </div>
             ))}
           </div>
