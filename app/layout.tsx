@@ -18,9 +18,6 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Steuernrechner Österreich",
   description: "Lokale Einnahmen-Ausgaben-Rechnung und Steuerübersicht für österreichische Einzelunternehmen.",
-  other: {
-    "codex-preview": "development",
-  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

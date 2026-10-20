@@ -9,7 +9,7 @@ const INFOEURO_URL =
 const ECB_HEADERS = {
   Accept: "text/csv,application/csv;q=0.9,*/*;q=0.1",
   "User-Agent":
-    "ust-assistent-at/1.0 (+https://ust-assistent-at.persie0.chatgpt.site)",
+    "ust-assistent-at/1.0 (+https://github.com/Persie0/steuernrechner)",
 };
 
 function parseCsvLine(line: string) {
