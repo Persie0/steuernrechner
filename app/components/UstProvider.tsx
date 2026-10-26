@@ -10,10 +10,12 @@ import {
 import {
   Contribution,
   download,
-  inferPeriod,
   inspectFile,
   money,
   PARSER_VERSION,
+  ExpenseDraft,
+  periodKey,
+  extractPdfText,
   Source,
   StoredReport,
   Values,
@@ -21,59 +23,65 @@ import {
   ZERO,
 } from "../lib/tax";
 
+import {
+  detectSource,
+  emptyReview,
+  summarizeQuarter,
+  type QuarterReview,
+} from "../lib/quarterly";
+
+export type UploadFeedback = {
+  level: "ok" | "warn" | "error";
+  message: string;
+};
+type Edit = { values: Values; rows: ZmRow[] };
 type Store = {
   year: number;
   quarter: number;
   tax: string;
   submitter: string;
-  values: Values;
-  rows: ZmRow[];
   reports: StoredReport[];
-  warnings: string[];
-  appodealManual: number;
-};
-export type UploadFeedback = {
-  level: "ok" | "warn" | "error";
-  message: string;
+  expenseOverrides: Record<string, ExpenseDraft>;
+  reviews: Record<string, QuarterReview>;
+  edits: Record<string, Edit>;
 };
 type Ctx = Store & {
   ready: boolean;
+  values: Values;
+  rows: ZmRow[];
+  warnings: string[];
+  totals: Contribution;
+  review: QuarterReview;
+  setReview: (patch: Partial<QuarterReview>) => void;
+  expenses: ExpenseDraft[];
+  updateExpense: (expense: ExpenseDraft) => void;
+  filingBlockers: string[];
   setYear: (n: number) => void;
   setQuarter: (n: number) => void;
   setTax: (s: string) => void;
   setSubmitter: (s: string) => void;
   setValues: (v: Values) => void;
   setRows: (r: ZmRow[]) => void;
-  setAppodealManual: (n: number) => void;
+  clearEdits: () => void;
   addFiles: (
     source: Source,
     files: FileList | null,
   ) => Promise<UploadFeedback[]>;
+  importFiles: (files: FileList | null) => Promise<UploadFeedback[]>;
   removeReport: (id: string) => Promise<void>;
   downloadReport: (id: string) => Promise<void>;
   downloadAllReports: () => Promise<number>;
   reset: (skipConfirm?: boolean) => Promise<boolean>;
-  loadQ2: () => void;
-  totals: Contribution;
-  missing: Record<Source, number[]>;
 };
 const initial: Store = {
-  year: 2026,
-  quarter: 2,
+  year: new Date().getFullYear(),
+  quarter: Math.max(1, Math.floor(new Date().getMonth() / 3)),
   tax: "",
   submitter: "",
-  values: { kz000: 0, kz057: 0, kz060: 0, kz066: 0 },
-  rows: [
-    { uid: "IE9825613N", name: "Google Commerce Limited", exact: 0 },
-    {
-      uid: "IE9700053D",
-      name: "Apple Distribution International Ltd.",
-      exact: 0,
-    },
-  ],
   reports: [],
-  warnings: [],
-  appodealManual: 0,
+  expenseOverrides: {},
+  reviews: {},
+  edits: {},
 };
 const Context = createContext<Ctx | null>(null);
 const LS = "ust-assistent-at-v2";
@@ -130,236 +138,400 @@ async function clearDb() {
   });
   db.close();
 }
-const add = (a: Contribution, b: Contribution): Contribution => ({
-  googleZm: a.googleZm + b.googleZm,
-  appleZm: a.appleZm + b.appleZm,
-  kz057: a.kz057 + b.kz057,
-  kz060: a.kz060 + b.kz060,
-  kz066: a.kz066 + b.kz066,
-  appodealUsd: a.appodealUsd + b.appodealUsd,
-  appodealEur: a.appodealEur + (b.appodealEur || 0),
-});
-const appleSource = (s: Source) =>
-  s === "apple_sales" || s === "apple_financial";
-const fingerprint = (x: { name: string; size: number; lastModified: number }) =>
-  `${x.name}:${x.size}:${x.lastModified}`;
-function normalizeLegacyReports(reports: StoredReport[]) {
-  const output: StoredReport[] = [];
-  const appleIndexes = new Map<string, number>();
-  for (const report of reports) {
-    const fd = /^FD_.+_((?:0[1-9])|1[0-2])\d{2}\.(?:txt|csv)$/i.test(
-        report.name,
-      ),
-      sm = /^S_M_/i.test(report.name);
-    const target: Source = fd
-      ? "apple_financial"
-      : sm
-        ? "apple_sales"
-        : report.source;
-    const remapped = target !== report.source,
-      { year, month } =
-        fd || sm
-          ? inferPeriod(report.name)
-          : { year: report.year, month: report.month };
-    const normalized: StoredReport = {
-      ...report,
-      source: target,
-      year,
-      month,
-      contribution: { ...ZERO, ...report.contribution },
-      message: remapped
-        ? `${report.message.replace(/^Detailed Sales/, "Financial Detailed").replace(/^Summary Sales/, "Summary Sales")} · Zuordnung automatisch korrigiert`
-        : report.message,
-    };
-    if (!appleSource(target)) {
-      output.push(normalized);
-      continue;
-    }
-    const key = fingerprint(normalized),
-      existingIndex = appleIndexes.get(key);
-    if (existingIndex === undefined) {
-      appleIndexes.set(key, output.length);
-      output.push(normalized);
-      continue;
-    }
-    const existing = output[existingIndex],
-      prefer =
-        remapped ||
-        Math.abs(normalized.contribution.appleZm) >
-          Math.abs(existing.contribution.appleZm);
-    if (prefer) output[existingIndex] = normalized;
-  }
-  return output;
-}
-
-function inPeriod(report: StoredReport, year: number, quarter: number) {
-  const months = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3];
-  return (
-    report.year === year &&
-    report.month !== null &&
-    months.includes(report.month)
-  );
-}
-
-function sumReports(reports: StoredReport[], year: number, quarter: number) {
-  return reports
-    .filter((report) => inPeriod(report, year, quarter))
-    .reduce((total, report) => add(total, report.contribution), { ...ZERO });
-}
-
-function deriveFromReports(store: Store, reports: StoredReport[]) {
-  const totals = sumReports(reports, store.year, store.quarter);
-  const standardRows = [
-    {
-      uid: "IE9825613N",
-      name: "Google Commerce Limited",
-      exact: +totals.googleZm.toFixed(2),
-    },
-    {
-      uid: "IE9700053D",
-      name: "Apple Distribution International Ltd.",
-      exact: +totals.appleZm.toFixed(2),
-    },
-  ];
-  const extraRows = store.rows.filter(
-    (row) => !standardRows.some((standard) => standard.uid === row.uid),
-  );
-  return {
-    ...store,
-    reports,
-    // Warnings are derived from the current reports below. Never retain the
-    // historical upload/event log in persistent state.
-    warnings: [],
-    values: {
-      ...store.values,
-      kz057: +totals.kz057.toFixed(2),
-      kz060: +totals.kz060.toFixed(2),
-      kz066: +totals.kz066.toFixed(2),
-    },
-    rows: [...standardRows, ...extraRows],
-    appodealManual: totals.appodealUsd
-      ? +totals.appodealUsd.toFixed(2)
-      : store.appodealManual,
-  };
-}
-
 export function UstProvider({ children }: { children: React.ReactNode }) {
   const [s, setS] = useState<Store>(initial),
     [ready, setReady] = useState(false);
-  const migrationStarted = useRef(false);
+  const migrationStarted = useRef(false),
+    importQueue = useRef(Promise.resolve());
   useEffect(() => {
-    let cancelled = false;
     queueMicrotask(() => {
-      if (cancelled) return;
       try {
         const raw = localStorage.getItem(LS);
         if (raw) {
-          const stored = { ...initial, ...JSON.parse(raw) } as Store;
-          const reports = normalizeLegacyReports(stored.reports || []);
-          setS(deriveFromReports(stored, reports));
+          const old = JSON.parse(raw);
+          setS({
+            ...initial,
+            ...old,
+            expenseOverrides: old.expenseOverrides || {},
+            reviews: old.reviews || {},
+            edits: old.edits || {},
+          });
         }
       } catch {}
       setReady(true);
     });
-    return () => {
-      cancelled = true;
-    };
   }, []);
   useEffect(() => {
     if (ready) localStorage.setItem(LS, JSON.stringify(s));
   }, [s, ready]);
   useEffect(() => {
     if (!ready || migrationStarted.current) return;
-    const stale = s.reports.filter(
-      (report) =>
-        report.level !== "error" &&
-        (report.parserVersion !== PARSER_VERSION ||
-          /nicht.*umgerechnet|nicht verfügbar/i.test(report.message)),
-    );
+    const stale = s.reports.filter((r) => r.parserVersion !== PARSER_VERSION);
     if (!stale.length) return;
     migrationStarted.current = true;
-    void Promise.all(
-      stale.map(async (report) => {
-        const stored = await getFile(report.id);
-        if (!stored?.blob) return null;
-        const file = new File([stored.blob], report.name, {
-          type: report.type,
-          lastModified: report.lastModified,
-        });
-        const parsed = await inspectFile(report.source, file);
-        if (parsed.record.level === "error") return null;
-        const updated = {
-          ...parsed.record,
-          id: report.id,
-          createdAt: report.createdAt,
-        };
-        await putFile(updated, stored.blob);
-        return updated;
-      }),
-    ).then((updates) => {
-      const replacements = new Map(
-        updates
-          .filter((report): report is StoredReport => Boolean(report))
-          .map((report) => [report.id, report]),
-      );
-      if (!replacements.size) return;
-      setS((current) => {
-        const reports = current.reports.map(
-          (report) => replacements.get(report.id) || report,
-        );
-        return deriveFromReports(current, reports);
-      });
-    });
+    void (async () => {
+      const updates = new Map<string, StoredReport>();
+      for (const report of stale) {
+        try {
+          const stored = await getFile(report.id);
+          if (!stored?.blob) continue;
+          const file = new File([stored.blob], report.name, {
+            type: report.type,
+            lastModified: report.lastModified,
+          });
+          const parsed = await inspectFile(report.source, file);
+          const updated = {
+            ...parsed.record,
+            id: report.id,
+            createdAt: report.createdAt,
+          };
+          await putFile(updated, stored.blob);
+          updates.set(report.id, updated);
+        } catch {}
+      }
+      setS((c) => ({
+        ...c,
+        reports: c.reports.map((r) => updates.get(r.id) || r),
+      }));
+    })();
   }, [ready, s.reports]);
-  const patch = <K extends keyof Store>(key: K, value: Store[K]) =>
-    setS((x) => ({ ...x, [key]: value }));
-  async function addFiles(
-    source: Source,
-    list: FileList | null,
-  ): Promise<UploadFeedback[]> {
-    if (!list?.length) return [];
-    const incoming = Array.from(list),
-      fresh = incoming.filter(
-        (f) =>
-          !s.reports.some(
-            (r) =>
-              r.id === `${source}:${f.name}:${f.size}:${f.lastModified}` ||
-              (appleSource(source) &&
-                appleSource(r.source) &&
-                r.level !== "error" &&
-                fingerprint(r) === fingerprint(f)),
-          ),
+  const key = periodKey(s.year, s.quarter),
+    review = s.reviews[key] || emptyReview();
+  const result = useMemo(
+    () =>
+      summarizeQuarter(
+        s.reports,
+        s.expenseOverrides,
+        s.reviews[periodKey(s.year, s.quarter)] || emptyReview(),
+        s.year,
+        s.quarter,
       ),
-      duplicateCount = incoming.length - fresh.length;
-    if (!fresh.length) {
-      const message =
-        "Bereits gespeichert – dieselbe Datei wird nicht unter zwei Apple-Berichtsarten abgelegt.";
-      return [{ level: "warn", message }];
-    }
-    const parsed = await Promise.all(fresh.map((f) => inspectFile(source, f))),
-      valid = parsed.filter((p) => p.record.level !== "error");
-    for (const p of valid) await putFile(p.record, p.blob);
-    setS((x) => {
-      const reports = [...x.reports, ...valid.map((p) => p.record)];
-      return deriveFromReports(x, reports);
-    });
-    const feedback: UploadFeedback[] = parsed.map(({ record: r }) => ({
-      level: r.level,
-      message: `${r.name}: ${r.month && r.year ? `${String(r.month).padStart(2, "0")}/${r.year} · ` : ""}${r.message}`,
+    [s],
+  );
+  const automatic: Edit = {
+    values: {
+      kz000: 0,
+      kz057: result.totals.kz057,
+      kz060: result.totals.kz060,
+      kz066: result.totals.kz066,
+    },
+    rows: [
+      {
+        uid: "IE9825613N",
+        name: "Google Commerce Limited",
+        exact: result.totals.googleZm,
+      },
+      {
+        uid: "IE9700053D",
+        name: "Apple Distribution International Ltd.",
+        exact: result.totals.appleZm,
+      },
+    ],
+  };
+  const edit = s.edits[key] || automatic;
+  const filingBlockers = [...result.blockers];
+  if (
+    s.reports.some(
+      (r) => r.parserVersion !== PARSER_VERSION && r.source !== "attachment",
+    )
+  )
+    filingBlockers.push(
+      "Alte Parserwerte werden neu berechnet. Fehlende Originale erneut importieren.",
+    );
+  if (!review.reviewed)
+    filingBlockers.push("Abschließende Quartalskontrolle noch bestätigen.");
+  const setReview = (patch: Partial<QuarterReview>) =>
+    setS((c) => ({
+      ...c,
+      reviews: {
+        ...c.reviews,
+        [key]: { ...(c.reviews[key] || emptyReview()), ...patch },
+      },
     }));
-    if (duplicateCount)
-      feedback.push({
-        level: "warn",
-        message: `${duplicateCount} bereits gespeicherte Datei(en) nicht doppelt eingerechnet.`,
+  const setValues = (values: Values) => {
+    setS((c) => ({
+      ...c,
+      edits: { ...c.edits, [key]: { ...(c.edits[key] || automatic), values } },
+      reviews: {
+        ...c.reviews,
+        [key]: { ...(c.reviews[key] || emptyReview()), reviewed: false },
+      },
+    }));
+  };
+  const setRows = (rows: ZmRow[]) => {
+    setS((c) => ({
+      ...c,
+      edits: { ...c.edits, [key]: { ...(c.edits[key] || automatic), rows } },
+      reviews: {
+        ...c.reviews,
+        [key]: { ...(c.reviews[key] || emptyReview()), reviewed: false },
+      },
+    }));
+  };
+  async function importBatch(
+    files: File[],
+    source?: Source,
+  ): Promise<UploadFeedback[]> {
+    const feedback: UploadFeedback[] = [],
+      parsed: { record: StoredReport; blob: Blob }[] = [];
+    const existing = new Set(s.reports.map((r) => r.sha256).filter(Boolean));
+    for (const file of files) {
+      if (file.size > 50 * 1024 * 1024) {
+        feedback.push({
+          level: "error",
+          message: `${file.name}: maximal 50 MB je Datei.`,
+        });
+        continue;
+      }
+      try {
+        let detected = source;
+        if (!detected) {
+          let text = "";
+          if (/\.(csv|txt)$/i.test(file.name)) text = await file.text();
+          else if (/\.pdf$/i.test(file.name) && !/^report_/.test(file.name))
+            text = await extractPdfText(await file.arrayBuffer());
+          detected = detectSource(file.name, text);
+        }
+        const value = await inspectFile(detected, file);
+        if (value.record.sha256 && existing.has(value.record.sha256)) {
+          feedback.push({
+            level: "warn",
+            message: `${file.name}: identischer Inhalt bereits vorhanden, nicht doppelt gerechnet.`,
+          });
+          continue;
+        }
+        if (value.record.level !== "error") {
+          existing.add(value.record.sha256);
+          await putFile(value.record, value.blob);
+          parsed.push(value);
+        }
+        feedback.push({
+          level: value.record.level,
+          message: `${file.name}: ${value.record.message}`,
+        });
+      } catch (e) {
+        feedback.push({
+          level: "error",
+          message: `${file.name}: ${e instanceof Error ? e.message : "Import fehlgeschlagen"}`,
+        });
+      }
+    }
+    if (parsed.length)
+      setS((c) => {
+        const hashes = new Set(c.reports.map((r) => r.sha256).filter(Boolean));
+        const added = parsed
+          .filter((p) => !p.record.sha256 || !hashes.has(p.record.sha256))
+          .map((p) => p.record);
+        return {
+          ...c,
+          reports: [...c.reports, ...added],
+          reviews: Object.fromEntries(
+            Object.entries(c.reviews).map(([k, v]) => [
+              k,
+              { ...v, reviewed: false },
+            ]),
+          ),
+        };
       });
     return feedback;
   }
+  async function importFiles(list: FileList | null): Promise<UploadFeedback[]> {
+    if (!list?.length) return [];
+    const input = Array.from(list),
+      files: File[] = [],
+      messages: UploadFeedback[] = [];
+    for (const file of input) {
+      if (!/\.zip$/i.test(file.name)) {
+        files.push(file);
+        continue;
+      }
+      if (file.size > 100 * 1024 * 1024) {
+        messages.push({
+          level: "error",
+          message: `${file.name}: ZIP maximal 100 MB.`,
+        });
+        continue;
+      }
+      const { default: JSZip } = await import("jszip"),
+        zip = await JSZip.loadAsync(file);
+      let total = 0,
+        count = 0;
+      for (const entry of Object.values(zip.files)) {
+        if (entry.dir || /(?:^|\/)__MACOSX\/|(?:^|\/)\./.test(entry.name))
+          continue;
+        if (++count > 500) {
+          messages.push({
+            level: "error",
+            message: "ZIP: maximal 500 Dateien.",
+          });
+          break;
+        }
+        const bytes = await entry.async("uint8array");
+        total += bytes.length;
+        if (total > 100 * 1024 * 1024) {
+          messages.push({
+            level: "error",
+            message: "ZIP: entpackter Inhalt über 100 MB.",
+          });
+          break;
+        }
+        const basename = entry.name.split("/").pop() || entry.name;
+        files.push(
+          new File([bytes as BlobPart], basename, {
+            lastModified: entry.date.getTime(),
+          }),
+        );
+      }
+    }
+    let backup: Partial<Store> | undefined;
+    for (const file of files.filter(
+      (f) => f.name === "quartalskontrolle.json",
+    )) {
+      try {
+        const payload = JSON.parse(await file.text());
+        if (
+          payload.version !== 1 ||
+          payload.parserVersion !== PARSER_VERSION ||
+          !payload.state ||
+          typeof payload.state !== "object"
+        )
+          throw new Error("Unbekanntes Backup-Format.");
+        const state = payload.state;
+        const expenseOverrides: Record<string, ExpenseDraft> = {};
+        for (const [id, e] of Object.entries(state.expenseOverrides || {}) as [
+          string,
+          ExpenseDraft,
+        ][]) {
+          if (
+            typeof e.title !== "string" ||
+            typeof e.date !== "string" ||
+            ![e.net, e.vat, e.share].every(Number.isFinite) ||
+            e.share < 0 ||
+            e.share > 100 ||
+            !["domestic", "reverse_charge", "none", "review"].includes(
+              e.vatCase,
+            )
+          )
+            throw new Error("Ungültige Ausgabe im Backup.");
+          expenseOverrides[id] = { ...e, confirmed: false };
+        }
+        const reviews: Record<string, QuarterReview> = {};
+        for (const [period, r] of Object.entries(state.reviews || {}) as [
+          string,
+          QuarterReview,
+        ][]) {
+          if (
+            !/^\d{4}-Q[1-4]$/.test(period) ||
+            ![
+              r.google,
+              r.apple,
+              r.appodeal,
+              r.expensesComplete,
+              r.modelConfirmed,
+            ].every((v) => typeof v === "boolean") ||
+            typeof r.appleExact !== "string" ||
+            typeof r.appleEvidence !== "string"
+          )
+            throw new Error("Ungültige Quartalsdaten im Backup.");
+          reviews[period] = { ...emptyReview(), ...r, reviewed: false };
+        }
+        const edits: Record<string, Edit> = {};
+        for (const [period, e] of Object.entries(state.edits || {}) as [
+          string,
+          Edit,
+        ][]) {
+          if (
+            !/^\d{4}-Q[1-4]$/.test(period) ||
+            !e.values ||
+            ![
+              e.values.kz000,
+              e.values.kz057,
+              e.values.kz060,
+              e.values.kz066,
+            ].every(Number.isFinite) ||
+            !Array.isArray(e.rows) ||
+            !e.rows.every(
+              (row) =>
+                typeof row.uid === "string" &&
+                typeof row.name === "string" &&
+                Number.isFinite(row.exact),
+            )
+          )
+            throw new Error("Ungültige Korrekturwerte im Backup.");
+          edits[period] = e;
+        }
+        backup = { expenseOverrides, reviews, edits };
+        if (/^\d{9}$/.test(state.tax)) backup.tax = state.tax;
+        if (/^\d{9}$/.test(state.submitter)) backup.submitter = state.submitter;
+        if (
+          Number.isInteger(state.year) &&
+          state.year >= 2024 &&
+          state.year <= 2100
+        )
+          backup.year = state.year;
+        if ([1, 2, 3, 4].includes(state.quarter))
+          backup.quarter = state.quarter;
+        messages.push({
+          level: "ok",
+          message:
+            "Quartalsstand wiederhergestellt; Originale werden neu berechnet und Bestätigungen müssen erneut geprüft werden.",
+        });
+      } catch (e) {
+        messages.push({
+          level: "error",
+          message:
+            e instanceof Error
+              ? e.message
+              : "Backup konnte nicht gelesen werden.",
+        });
+      }
+    }
+    let feedback: UploadFeedback[] = [];
+    const task = importQueue.current.then(async () => {
+      feedback = await importBatch(
+        files.filter((f) => f.name !== "quartalskontrolle.json"),
+      );
+      if (backup)
+        setS((c) => ({
+          ...c,
+          ...backup,
+          expenseOverrides: {
+            ...c.expenseOverrides,
+            ...backup.expenseOverrides,
+          },
+          reviews: { ...c.reviews, ...backup.reviews },
+          edits: { ...c.edits, ...backup.edits },
+        }));
+    });
+    importQueue.current = task.catch(() => {});
+    await task;
+    return [...messages, ...feedback];
+  }
   async function removeReport(id: string) {
     await deleteFile(id);
-    setS((x) => {
-      const reports = x.reports.filter((r) => r.id !== id);
-      return deriveFromReports(x, reports);
-    });
+    setS((c) => ({
+      ...c,
+      reports: c.reports.filter((r) => r.id !== id),
+      expenseOverrides: Object.fromEntries(
+        Object.entries(c.expenseOverrides).filter(([expenseId]) => {
+          const removed = c.reports
+            .find((r) => r.id === id)
+            ?.expenses?.some((e) => e.id === expenseId);
+          return (
+            !removed ||
+            c.reports.some(
+              (r) => r.id !== id && r.expenses?.some((e) => e.id === expenseId),
+            )
+          );
+        }),
+      ),
+      reviews: Object.fromEntries(
+        Object.entries(c.reviews).map(([k, v]) => [
+          k,
+          { ...v, reviewed: false },
+        ]),
+      ),
+    }));
   }
   async function downloadReport(id: string) {
     const item = await getFile(id);
@@ -372,57 +544,38 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function downloadAllReports() {
-    if (!s.reports.length) return 0;
-    const { default: JSZip } = await import("jszip");
-    const zip = new JSZip();
-    const folderNames: Record<Source, string> = {
-      google: "Google Play",
-      apple_sales: "Apple Sales",
-      apple_financial: "Apple Financial",
-      appodeal: "Appodeal",
-      kalkuel: "Kalkuel",
-    };
-    const usedPaths = new Set<string>();
-    let included = 0;
-
+    const { default: JSZip } = await import("jszip"),
+      zip = new JSZip();
+    let count = 0;
     for (const report of s.reports) {
       const item = await getFile(report.id);
-      if (!item?.blob) continue;
-      const cleanName =
-        item.name.replace(/[\\/:*?"<>|]/g, "_").trim() || `Datei-${included + 1}`;
-      const dot = cleanName.lastIndexOf(".");
-      const stem = dot > 0 ? cleanName.slice(0, dot) : cleanName;
-      const extension = dot > 0 ? cleanName.slice(dot) : "";
-      let candidate = `${folderNames[report.source]}/${cleanName}`;
-      let suffix = 2;
-      while (usedPaths.has(candidate)) {
-        candidate = `${folderNames[report.source]}/${stem} (${suffix})${extension}`;
-        suffix += 1;
+      if (item?.blob) {
+        zip.file(
+          `${report.source}/${++count}-${item.name.replace(/[\\/:*?"<>|]/g, "_")}`,
+          item.blob,
+        );
       }
-      usedPaths.add(candidate);
-      zip.file(candidate, item.blob);
-      included += 1;
     }
-
-    if (!included) return 0;
-    const archive = await zip.generateAsync({
-      type: "blob",
-      compression: "DEFLATE",
-      compressionOptions: { level: 6 },
-    });
-    const url = URL.createObjectURL(archive);
-    const a = document.createElement("a");
+    zip.file(
+      "quartalskontrolle.json",
+      JSON.stringify(
+        { version: 1, parserVersion: PARSER_VERSION, state: s },
+        null,
+        2,
+      ),
+    );
+    const url = URL.createObjectURL(await zip.generateAsync({ type: "blob" })),
+      a = document.createElement("a");
     a.href = url;
-    a.download = `ust-assistent-Q${s.quarter}-${s.year}-originaldateien.zip`;
+    a.download = `UVA-ZM-Q${s.quarter}-${s.year}-Backup.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return included;
+    return count;
   }
   async function reset(skipConfirm = false) {
     if (
-      !skipConfirm && !confirm(
-        "Alle lokal gespeicherten Dateien und Eingaben dieses Assistenten löschen?",
-      )
+      !skipConfirm &&
+      !confirm("Alle lokalen Dateien und Quartalsdaten löschen?")
     )
       return false;
     await clearDb();
@@ -430,149 +583,90 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     setS(initial);
     return true;
   }
-  function loadQ2() {
-    setS((x) => ({
-      ...x,
-      year: 2026,
-      quarter: 2,
-      values: { kz000: 0, kz057: 28.93, kz060: 101.2, kz066: 27.4 },
-      rows: [
-        { uid: "IE9825613N", name: "Google Commerce Limited", exact: 602.12 },
-        {
-          uid: "IE9700053D",
-          name: "Apple Distribution International Ltd.",
-          exact: 111.41,
-        },
-      ],
-      warnings: [],
-    }));
-  }
-  const totals = useMemo(
-    () => sumReports(s.reports, s.year, s.quarter),
-    [s.reports, s.year, s.quarter],
+  return (
+    <Context.Provider
+      value={{
+        ...s,
+        ready,
+        ...edit,
+        totals: result.totals,
+        review,
+        setReview,
+        expenses: result.expenses,
+        filingBlockers,
+        warnings: [
+          ...new Set([
+            ...result.blockers,
+            ...result.selected
+              .filter((r) => r.level !== "ok")
+              .map((r) => `${r.name}: ${r.message}`),
+          ]),
+        ],
+        setYear: (year) => setS((c) => ({ ...c, year })),
+        setQuarter: (quarter) => setS((c) => ({ ...c, quarter })),
+        setTax: (tax) => setS((c) => ({ ...c, tax })),
+        setSubmitter: (submitter) => setS((c) => ({ ...c, submitter })),
+        setValues,
+        setRows,
+        clearEdits: () =>
+          setS((c) => {
+            const edits = { ...c.edits };
+            delete edits[key];
+            return {
+              ...c,
+              edits,
+              reviews: {
+                ...c.reviews,
+                [key]: {
+                  ...(c.reviews[key] || emptyReview()),
+                  reviewed: false,
+                },
+              },
+            };
+          }),
+        updateExpense: (expense) =>
+          setS((c) => ({
+            ...c,
+            expenseOverrides: { ...c.expenseOverrides, [expense.id]: expense },
+            reviews: {
+              ...c.reviews,
+              [key]: { ...(c.reviews[key] || emptyReview()), reviewed: false },
+            },
+          })),
+        addFiles: (source, files) =>
+          importBatch(Array.from(files || []), source),
+        importFiles,
+        removeReport,
+        downloadReport,
+        downloadAllReports,
+        reset,
+      }}
+    >
+      {children}
+    </Context.Provider>
   );
-  const currentWarnings = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          s.reports
-            .filter(
-              (report) =>
-                inPeriod(report, s.year, s.quarter) &&
-                report.level !== "ok",
-            )
-            .map((report) => `${report.name}: ${report.message}`),
-        ),
-      ),
-    [s.reports, s.year, s.quarter],
-  );
-  const months = useMemo(
-    () => [s.quarter * 3 - 2, s.quarter * 3 - 1, s.quarter * 3],
-    [s.quarter],
-  );
-  const missing = useMemo(
-    () =>
-      Object.fromEntries(
-        (
-          [
-            "google",
-            "apple_sales",
-            "apple_financial",
-            "appodeal",
-            "kalkuel",
-          ] as Source[]
-        ).map((src) => [
-          src,
-          src === "apple_sales"
-            ? []
-            : src === "kalkuel"
-              ? s.reports.some(
-                  (r) =>
-                    r.source === src &&
-                    r.level !== "error" &&
-                    r.year === s.year &&
-                    r.month !== null &&
-                    months.includes(r.month),
-                )
-                ? []
-                : months
-              : months.filter(
-                  (m) =>
-                    !s.reports.some(
-                      (r) =>
-                        r.source === src &&
-                        r.month === m &&
-                        r.year === s.year &&
-                        r.level !== "error",
-                    ),
-                ),
-        ]),
-      ) as Record<Source, number[]>,
-    [s.reports, s.year, months],
-  );
-  const value: Ctx = {
-    ...s,
-    warnings: currentWarnings,
-    ready,
-    setYear: (n) =>
-      setS((current) =>
-        deriveFromReports({ ...current, year: n }, current.reports),
-      ),
-    setQuarter: (n) =>
-      setS((current) =>
-        deriveFromReports({ ...current, quarter: n }, current.reports),
-      ),
-    setTax: (v) => patch("tax", v),
-    setSubmitter: (v) => patch("submitter", v),
-    setValues: (v) => patch("values", v),
-    setRows: (v) => patch("rows", v),
-    setAppodealManual: (v) => patch("appodealManual", v),
-    addFiles,
-    removeReport,
-    downloadReport,
-    downloadAllReports,
-    reset,
-    loadQ2,
-    totals,
-    missing,
-  };
-  return <Context.Provider value={value}>{children}</Context.Provider>;
 }
 export function useUst() {
-  const x = useContext(Context);
-  if (!x) throw new Error("UstProvider missing");
-  return x;
+  const context = useContext(Context);
+  if (!context) throw new Error("UstProvider missing");
+  return context;
 }
 export function StoredNotice() {
   const { reports } = useUst();
-  const bytes = reports.reduce((s, r) => s + r.size, 0);
   return (
     <span className="storedNotice">
-      ● {reports.length} Dateien · {(bytes / 1024 / 1024).toFixed(1)} MB lokal
-      gespeichert
+      ● {reports.length} Dateien ·{" "}
+      {(reports.reduce((a, r) => a + r.size, 0) / 1024 / 1024).toFixed(1)} MB
+      lokal gespeichert
     </span>
   );
 }
 export function Q2Status() {
-  const { missing } = useUst();
-  const labels: Record<Source, string> = {
-    google: "Google Earnings (optional)",
-    apple_sales: "Apple Sales (optional)",
-    apple_financial: "Apple Financial FD_ (optional)",
-    appodeal: "Appodeal (optional)",
-    kalkuel: "Kalkül (optional)",
-  };
+  const { filingBlockers } = useUst();
   return (
     <div className="statusList">
-      {(Object.keys(labels) as Source[]).map((k) => (
-        <div key={k} className={missing[k].length ? "incomplete" : "complete"}>
-          <b>{labels[k]}</b>
-          <span>
-            {missing[k].length
-              ? "Nicht importiert oder Zeitraum unvollständig – optional"
-              : "Für den Zeitraum erkannt"}
-          </span>
-        </div>
+      {filingBlockers.map((message) => (
+        <p key={message}>{message}</p>
       ))}
     </div>
   );
@@ -584,5 +678,5 @@ export const formatBytes = (n: number) =>
       ? `${(n / 1024).toFixed(1)} KB`
       : `${(n / 1024 / 1024).toFixed(1)} MB`;
 export const totalText = (c: Contribution) =>
-  `Google ZM ${money(c.googleZm)}, Apple ZM ${money(c.appleZm)}, Appodeal ${money(c.appodealUsd, "USD")} / ${money(c.appodealEur)}`;
+  `Google ZM ${money(c.googleZm)}, Apple ZM ${money(c.appleZm)}, Appodeal ${money(c.appodealUsd, "USD")}`;
 export { download };

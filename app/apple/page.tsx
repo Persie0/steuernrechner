@@ -14,7 +14,7 @@ export default function Apple() {
         <span></span>
       </section>
       <section className="card">
-        <h2>Für Q2 sind deine drei FD-Dateien die Pflichtbasis</h2>
+        <h2>Kalenderquartal vollständig mit FD-Dateien abdecken</h2>
         <div className="appleMatrix">
           <div></div>
           <b>April</b>
@@ -31,10 +31,13 @@ export default function Apple() {
         </div>
         <p className="note">
           <code>FD_</code> ist der Financial-Detailed-Bericht und reicht als
-          Apple-Basis für die Berechnung. <code>S_M_</code> ist ein anderer,
-          freiwilliger Kontrollbericht. Wenn dein Download mit <code>FD_</code>{" "}
-          beginnt und die Spalten <code>Transaction Date</code> sowie{" "}
-          <code>Settlement Date</code> enthält, fehlt in dieser Datei nichts.
+          Apple-Basis für die Berechnung – einschließlich der überlappenden
+          Folgeberichte. <code>S_M_</code> ist ein anderer, freiwilliger
+          Kontrollbericht. Wenn dein Download mit <code>FD_</code> beginnt und
+          die Spalten <code>Transaction Date</code> sowie{" "}
+          <code>Settlement Date</code> enthält, ist die Datei vom richtigen Typ.
+          Ihre Datumsgrenzen müssen das Kalenderquartal trotzdem vollständig
+          abdecken.
         </p>
       </section>
       <section className="twoCol">
@@ -131,7 +134,9 @@ export default function Apple() {
             <b>1</b>
             <span>
               <strong>Financial-Datei</strong>
-              <code>FD_… → Berichtsmonat und Partner Share prüfen</code>
+              <code>
+                FD_… → Kalender-Transaktionsdatum und Partner Share prüfen
+              </code>
             </span>
           </div>
           <div>
@@ -171,9 +176,11 @@ export default function Apple() {
             Distribution International in Irland fließt in die österreichische
             ZM; die sechs anderen Entities werden getrennt als nicht ZM
             ausgewiesen. Für Währungen ohne EZB-Referenzkurs wird der offizielle
-            Monatskurs der Europäischen Kommission (InforEuro) verwendet. Neue
-            unbekannte Ländercodes werden sichtbar zur Prüfung markiert und
-            niemals still verworfen.
+            Monatskurs der Europäischen Kommission (InforEuro) nur als
+            Schätzwert verwendet; eine bestätigte EUR-Abrechnung oder ein
+            zulässiger Kursbeleg ist vor Export nötig. Neue unbekannte
+            Ländercodes werden sichtbar zur Prüfung markiert und niemals still
+            verworfen.
           </span>
         </div>
       </section>
