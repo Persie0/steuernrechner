@@ -1,6 +1,86 @@
 import Link from "next/link";
-export default function Google(){return <><section className="platformHero googleBg"><div><p className="eyebrow">Plattform 01</p><h1>Google Play</h1><p>Earnings Reports bestimmen die ZM-Leistung und Plattformgebühren. Auszahlung und Steuer-PDFs sind nur Kontrollbelege.</p></div><span>G</span></section><section className="twoCol"><article className="card"><h2>Für Q2 hochladen</h2><div className="monthFiles"><span>APR <b>Earnings CSV</b></span><span>MAI <b>Earnings CSV</b></span><span>JUN <b>Earnings CSV</b></span></div><p>Pfad: <b>Play Console → Download reports → Financial → Earnings</b>. Je Abrechnungsmonat gibt es normalerweise eine Datei.</p><pre>{`Transaction Type,Buyer Country,Merchant Currency,Amount (Merchant Currency)\nCharge,DE,EUR,9.99\nGoogle fee,DE,EUR,-1.50\nCharge refund,AT,EUR,-4.99\nGoogle fee refund,AT,EUR,0.75`}</pre></article><article className="card"><h2>Nicht verwechseln</h2><img className="guideImage" src="/guides/google-payments.jpg" alt="Google Payments Transactions"/><p>„Automatic payment“ ist die Überweisung auf dein Bankkonto. Sie ist nicht der Umsatz, weil darin Gebühren, Refunds und andere Abzüge bereits saldiert sind.</p></article></section>
-<section className="card"><div className="sectionTitle"><span>01</span><div><h2>Zeilenlogik des Earnings Reports</h2><p>Die Vorzeichen aus der Datei werden unverändert übernommen.</p></div></div><div className="dataDictionary"><div><b>Transaction Type</b><b>Bedeutung</b><b>Rechnung</b></div><div><code>Charge</code><span>Verkauf</span><span>positiver Erlös</span></div><div><code>Charge refund</code><span>Rückerstattung an Käufer</span><span>negativer Erlös</span></div><div><code>Google fee</code><span>Plattformgebühr</span><span>meist negativ</span></div><div><code>Google fee refund</code><span>rückerstattete Gebühr</span><span>positiv</span></div><div><code>Tax</code><span>Endkunden-/Quellensteuerinformation</span><span>nicht als Google-ZM addieren</span></div></div></section>
-<section className="card"><div className="sectionTitle"><span>02</span><div><h2>Konkrete Berechnung</h2><p>Erst Merchant-of-Record-Länder filtern, dann die vier relevanten Typen addieren.</p></div></div><div className="formulaSteps"><div><b>1</b><span><strong>Land prüfen</strong><code>Buyer Country ∈ Google-MoR-Länderliste</code></span></div><div><b>2</b><span><strong>ZM-Umsatz</strong><code>Charge + Charge refund + Google fee + Google fee refund</code></span></div><div><b>3</b><span><strong>Gebührenbasis</strong><code>−(Google fee + Google fee refund)</code></span></div><div><b>4</b><span><strong>UVA bei 20 %</strong><code>KZ057 = Basis × 20 %; KZ066 = abzugsfähiger Anteil × 20 %</code></span></div></div><div className="exampleCalc"><p>Beispiel oben:</p><code>ZM: 9,99 − 1,50 − 4,99 + 0,75 = 4,25 €</code><code>Gebühr: −(−1,50 + 0,75) = 0,75 €</code><code>RC-Steuer: 0,75 × 20 % = 0,15 €</code></div></section>
-<section className="card"><h2>Kontrollbelege</h2><div className="compare"><article><b>Gebührenrechnung</b><p>Hilft bei Entity, UID, Rechnungsdatum und Reverse-Charge-Beleg. Nicht als eigener ZM-Umsatz buchen.</p></article><article><b>CIDE / IRRF / Auszahlung</b><p>Quellensteuer beziehungsweise Zahlungsfluss. Nicht mit österreichischer Umsatzsteuer oder ZM verwechseln.</p></article></div><img className="wideGuide" src="/guides/google-documents.jpg" alt="Google Dokumente mit Quellensteuern und Auszahlung"/></section><section className="sourceLinks"><a href="https://support.google.com/googleplay/android-developer/answer/6135870?hl=de" target="_blank">Offizielle Google-Reportfelder ↗</a><a href="https://support.google.com/googleplay/android-developer/answer/7645364?hl=de" target="_blank">Google Merchant-of-Record-Länder ↗</a></section><section className="nextCard"><div><b>Nächster Schritt</b><h2>Apple funktioniert ähnlich – aber mit mehreren Reports</h2></div><Link className="primary" href="/apple">Apple verstehen</Link></section></>}
-
+export default function Google() {
+  return (
+    <>
+      <section className="subHero">
+        <p className="eyebrow">Import-Hilfe</p>
+        <h1>
+          Google Play <em>richtig zuordnen</em>
+        </h1>
+        <p>
+          Für das gewählte Quartal die drei Earnings-CSV-Dateien laden. Jeweils
+          „Amount (Merchant Currency)“ in EUR verwenden; Käuferwährungen nicht
+          nochmals umrechnen.
+        </p>
+      </section>
+      <section className="card">
+        <h2>Zwei verschiedene Leistungsbeziehungen</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Teil</th>
+              <th>Berechnung im regionalen Standardmodell</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Wiederverkaufsgebiete / GCL</td>
+              <td>
+                Charges + Charge refunds + Google fee + Google fee refund
+                ergeben den Erlös nach Marge für die ZM an IE9825613N.
+              </td>
+            </tr>
+            <tr>
+              <td>Separat bezogene Google-Dienste außerhalb dieser Gebiete</td>
+              <td>
+                −(Google fee + Google fee refund) ergibt die mögliche RC-Basis;
+                20 % Steuer in KZ 057 und betrieblicher Vorsteuerabzug in KZ
+                066.
+              </td>
+            </tr>
+            <tr>
+              <td>Gebühren-PDFs</td>
+              <td>
+                Vertragspartner, Betrag und Leistungszeitraum abgleichen; nicht
+                ein zweites Mal auf die bereits berücksichtigten
+                Earnings-Gebühren addieren.
+              </td>
+            </tr>
+            <tr>
+              <td>Tax / IRRF / CIDE / Auszahlung</td>
+              <td>
+                Separater Steuer- und Zahlungsabgleich. Keine automatische
+                österreichische Vorsteuer und keine zusätzliche ZM.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="callout">
+          Dieses Modell muss zu den für den Zeitraum gültigen Verträgen passen.
+          Die auszahlende Bankgesellschaft, das Käuferland und die reine
+          Inkassofunktion beweisen den steuerlichen Leistungsempfänger nicht
+          allein. Alternative Abrechnung oder Direktverkäufe separat prüfen.
+        </p>
+      </section>
+      <section className="card">
+        <h2>Quelle und Belegabgleich</h2>
+        <p>
+          <a href="https://play.google/developer-distribution-agreement.html">
+            Google Developer Distribution Agreement
+          </a>{" "}
+          ·{" "}
+          <a href="https://support.google.com/googleplay/android-developer/answer/7645364">
+            Google-Wiederverkaufsgebiete
+          </a>{" "}
+          ·{" "}
+          <a href="https://www.wko.at/steuern/reverse-charge-dienstleistungen-b2b">
+            WKO: RC und Kennzahlen
+          </a>
+        </p>
+        <Link className="primary" href="/berechnung">
+          Zum Quartalsdurchlauf
+        </Link>
+      </section>
+    </>
+  );
+}

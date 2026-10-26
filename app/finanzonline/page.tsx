@@ -1,7 +1,276 @@
 "use client";
-import {download,useUst} from "../components/UstProvider";import {money,u13Xml,u30Format,u30Xml} from "../lib/tax";import {useState} from "react";
-export default function FinanzOnline(){const{year,quarter,tax,setTax,submitter,setSubmitter,values,rows,reports,warnings}=useUst();const[checked,setChecked]=useState(false),[production,setProduction]=useState(false);const balance=values.kz000+values.kz057-values.kz060-values.kz066;const valid=/^\d{9}$/.test(tax)&&/^\d{9}$/.test(submitter||tax)&&checked&&production;function audit(){const lines=["Bereich;Kennzahl/UID;Exakter Wert;XML-Wert/Hinweis",`UVA;KZ000;${values.kz000.toFixed(2)};${values.kz000.toFixed(2)}`,`UVA;KZ057;${values.kz057.toFixed(2)};${values.kz057.toFixed(2)}`,`UVA;KZ060;${values.kz060.toFixed(2)};${values.kz060.toFixed(2)}`,`UVA;KZ066;${values.kz066.toFixed(2)};${values.kz066.toFixed(2)}`,`UVA;KZ095 Kontrolle;${balance.toFixed(2)};FinanzOnline berechnet`,...rows.map(r=>`ZM;${r.uid};${r.exact.toFixed(2)};${Math.trunc(r.exact)}`),...reports.map(r=>`Datei;${r.name};;${r.message}`)];download(`Pruefbericht_Q${quarter}_${year}.csv`,"\ufeff"+lines.join("\n"),"text/csv;charset=utf-8")}
-return <><section className="subHero"><p className="eyebrow">FinanzOnline · XML-Generator</p><h1>Dateien erzeugen und <em>richtig übermitteln</em></h1><p>U30 für die UVA, U13 für die Zusammenfassende Meldung und ein CSV-Prüfbericht für deine Ablage.</p></section><section className="xmlVersion"><b>Format automatisch gewählt</b><span>U30 {u30Format(year,quarter)} · Q{quarter}/{year} · Q2/2026 bleibt „ab 01/2022“, ab Q3/2026 wird „ab 07/2026“ verwendet</span></section><section className="twoCol"><article className="card"><h2>Identifikation im XML</h2><label>Eigene 9-stellige Steuernummer<input inputMode="numeric" maxLength={9} placeholder="z. B. 12-345/6789" value={tax} onChange={e=>setTax(e.target.value.replace(/\D/g,"").slice(0,9))}/><small className="fieldHint">Trennzeichen werden entfernt: 12-345/6789 → 123456789.</small></label><label>Übermittler-Steuernummer<input inputMode="numeric" maxLength={9} placeholder="leer = eigene Nummer" value={submitter} onChange={e=>setSubmitter(e.target.value.replace(/\D/g,"").slice(0,9))}/></label><p className="note">Keine UID mit ATU eintragen. Gemeint ist die 9-stellige Finanzamts-Steuernummer; sie bleibt lokal in diesem Browser gespeichert.</p></article><article className="card"><h2>Letzte Summenkontrolle</h2><p><b>UVA-Kontrolle:</b> {money(balance)} {balance<0?"Gutschrift":"Zahllast"}</p>{rows.map(r=><p key={r.uid}><b>ZM {r.uid}:</b> {money(r.exact)} → XML {Math.trunc(r.exact)} €</p>)}<p><b>Belegbasis:</b> {reports.length} lokal gespeicherte Dateien</p></article></section>
-<section className="card"><div className="sectionTitle"><span>01</span><div><h2>Export freigeben</h2></div></div><div className="checks"><label><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)}/> Ich habe April, Mai und Juni, alle Warnungen, UIDs und finalen Werte geprüft.</label><label><input type="checkbox" checked={production} onChange={e=>setProduction(e.target.checked)}/> Ich weiß, dass nur Produktionsübermittlung plus positives Protokoll als Abgabe gelten.</label></div>{warnings.length>0&&<details className="warningDetails"><summary>{warnings.length} gespeicherte Hinweise anzeigen</summary>{warnings.map((w,i)=><p key={i}>⚠ {w}</p>)}</details>}<div className="actions"><button disabled={!valid} onClick={()=>download(`U30_Q${quarter}_${year}.xml`,u30Xml(year,quarter,tax,submitter||tax,values))}>U30 · UVA XML</button><button disabled={!valid||!rows.some(r=>r.exact)} onClick={()=>download(`U13_Q${quarter}_${year}.xml`,u13Xml(year,quarter,tax,submitter||tax,rows))}>U13 · ZM XML</button><button className="secondaryBtn" onClick={audit}>Prüfbericht CSV</button></div>{!valid&&<p className="hint">Beide Bestätigungen und eine gültige 9-stellige Steuernummer sind für XML erforderlich.</p>}</section>
-<section className="card"><div className="sectionTitle"><span>02</span><div><h2>Übermittlung Schritt für Schritt</h2></div></div><div className="submitTimeline"><article><b>1</b><div><h3>UVA U30</h3><p>FinanzOnline → Eingaben → Übermittlung → Umsatzsteuervoranmeldung → XML auswählen → Produktionsübermittlung.</p></div></article><article><b>2</b><div><h3>ZM U13</h3><p>Eingaben → Übermittlung → Zusammenfassende Meldung → U13-XML auswählen → Produktionsübermittlung.</p></div></article><article><b>3</b><div><h3>Protokoll</h3><p>Nachrichten → Übermittlungsprotokoll. Erst die positive inhaltliche Rückmeldung bestätigt die Abgabe.</p></div></article><article><b>4</b><div><h3>Ablage</h3><p>XML, positives Protokoll, Prüfbericht und Originalreports aufbewahren. Belege normalerweise nicht ungefragt mitsenden.</p></div></article></div></section>
-<section className="card"><h2>Berichtigung und verspäteter Apple-Bericht</h2><p>Kommt nach der ursprünglichen Abgabe noch ein vollständigerer Apple-Bericht für 28.–30. Juni, wird die ZM nicht nur um die Differenz ergänzt. Eine berichtigte ZM enthält erneut die vollständigen Q2-Werte aller betroffenen Geschäftspartner. Die UVA wird nur berichtigt, wenn sich tatsächlich eine UVA-Kennzahl ändert.</p></section><section className="sourceLinks"><a href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/softwarehersteller-erklarungen-und-antraege.html" target="_blank">BMF U30/U13-Strukturen ↗</a><a href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/datenstromuebermittlung.html" target="_blank">BMF Datenstromübermittlung ↗</a></section></>}
+import { download, useUst } from "../components/UstProvider";
+import { money, u13Xml, u30Format, u30Xml } from "../lib/tax";
+import { useState } from "react";
+export default function FinanzOnline() {
+  const {
+    year,
+    quarter,
+    tax,
+    setTax,
+    submitter,
+    setSubmitter,
+    values,
+    rows,
+    reports,
+    warnings,
+    filingBlockers,
+  } = useUst();
+  const [checked, setChecked] = useState(false),
+    [production, setProduction] = useState(false);
+  const balance =
+    values.kz000 * 0.2 + values.kz057 - values.kz060 - values.kz066;
+  const valid =
+    /^\d{9}$/.test(tax) &&
+    /^\d{9}$/.test(submitter || tax) &&
+    checked &&
+    production &&
+    filingBlockers.length === 0;
+  function audit() {
+    const lines = [
+      "Bereich;Kennzahl/UID;Exakter Wert;XML-Wert/Hinweis",
+      `UVA;KZ000;${values.kz000.toFixed(2)};${values.kz000.toFixed(2)}`,
+      `UVA;KZ057;${values.kz057.toFixed(2)};${values.kz057.toFixed(2)}`,
+      `UVA;KZ060;${values.kz060.toFixed(2)};${values.kz060.toFixed(2)}`,
+      `UVA;KZ066;${values.kz066.toFixed(2)};${values.kz066.toFixed(2)}`,
+      `UVA;KZ095 Kontrolle;${balance.toFixed(2)};FinanzOnline berechnet`,
+      ...rows.map(
+        (r) => `ZM;${r.uid};${r.exact.toFixed(2)};${Math.trunc(r.exact)}`,
+      ),
+      ...reports.map((r) => `Datei;${r.name};;${r.message}`),
+    ];
+    download(
+      `Pruefbericht_Q${quarter}_${year}.csv`,
+      "\ufeff" + lines.join("\n"),
+      "text/csv;charset=utf-8",
+    );
+  }
+  return (
+    <>
+      <section className="subHero">
+        <p className="eyebrow">FinanzOnline · XML-Generator</p>
+        <h1>
+          Dateien erzeugen und <em>richtig übermitteln</em>
+        </h1>
+        <p>
+          U30 für die UVA, U13 für die Zusammenfassende Meldung und ein
+          CSV-Prüfbericht für deine Ablage.
+        </p>
+      </section>
+      <section className="xmlVersion">
+        <b>Format automatisch gewählt</b>
+        <span>
+          U30 {u30Format(year, quarter)} · Q{quarter}/{year} · Q2/2026 bleibt
+          „ab 01/2022“, ab Q3/2026 wird „ab 07/2026“ verwendet
+        </span>
+      </section>
+      <section className="twoCol">
+        <article className="card">
+          <h2>Identifikation im XML</h2>
+          <label>
+            Eigene 9-stellige Steuernummer
+            <input
+              inputMode="numeric"
+              maxLength={9}
+              placeholder="z. B. 12-345/6789"
+              value={tax}
+              onChange={(e) =>
+                setTax(e.target.value.replace(/\D/g, "").slice(0, 9))
+              }
+            />
+            <small className="fieldHint">
+              Trennzeichen werden entfernt: 12-345/6789 → 123456789.
+            </small>
+          </label>
+          <label>
+            Übermittler-Steuernummer
+            <input
+              inputMode="numeric"
+              maxLength={9}
+              placeholder="leer = eigene Nummer"
+              value={submitter}
+              onChange={(e) =>
+                setSubmitter(e.target.value.replace(/\D/g, "").slice(0, 9))
+              }
+            />
+          </label>
+          <p className="note">
+            Keine UID mit ATU eintragen. Gemeint ist die 9-stellige
+            Finanzamts-Steuernummer; sie bleibt lokal in diesem Browser
+            gespeichert.
+          </p>
+        </article>
+        <article className="card">
+          <h2>Letzte Summenkontrolle</h2>
+          <p>
+            <b>UVA-Kontrolle:</b> {money(balance)}{" "}
+            {balance < 0 ? "Gutschrift" : "Zahllast"}
+          </p>
+          {rows.map((r) => (
+            <p key={r.uid}>
+              <b>ZM {r.uid}:</b> {money(r.exact)} → XML {Math.trunc(r.exact)} €
+            </p>
+          ))}
+          <p>
+            <b>Belegbasis:</b> {reports.length} lokal gespeicherte Dateien
+          </p>
+        </article>
+      </section>
+      <section className="card">
+        {filingBlockers.length > 0 && (
+          <div className="callout">
+            <b>Export gesperrt · offene Quartalsprüfung</b>
+            <ul>
+              {filingBlockers.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+            <a href="/berechnung">Zum geführten Quartalsdurchlauf</a>
+          </div>
+        )}
+        <div className="sectionTitle">
+          <span>01</span>
+          <div>
+            <h2>Export freigeben</h2>
+          </div>
+        </div>
+        <div className="checks">
+          <label>
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => setChecked(e.target.checked)}
+            />{" "}
+            Ich habe den gewählten Kalenderzeitraum, alle offenen Punkte, UIDs
+            und finalen Werte geprüft.
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={production}
+              onChange={(e) => setProduction(e.target.checked)}
+            />{" "}
+            Ich weiß, dass nur Produktionsübermittlung plus positives Protokoll
+            als Abgabe gelten.
+          </label>
+        </div>
+        {warnings.length > 0 && (
+          <details className="warningDetails">
+            <summary>{warnings.length} gespeicherte Hinweise anzeigen</summary>
+            {warnings.map((w, i) => (
+              <p key={i}>⚠ {w}</p>
+            ))}
+          </details>
+        )}
+        <div className="actions">
+          <button
+            disabled={!valid}
+            onClick={() =>
+              download(
+                `U30_Q${quarter}_${year}.xml`,
+                u30Xml(year, quarter, tax, submitter || tax, values),
+              )
+            }
+          >
+            U30 · UVA XML
+          </button>
+          <button
+            disabled={!valid || !rows.some((r) => r.exact)}
+            onClick={() =>
+              download(
+                `U13_Q${quarter}_${year}.xml`,
+                u13Xml(year, quarter, tax, submitter || tax, rows),
+              )
+            }
+          >
+            U13 · ZM XML
+          </button>
+          <button className="secondaryBtn" onClick={audit}>
+            Prüfbericht CSV
+          </button>
+        </div>
+        {!valid && (
+          <p className="hint">
+            Für XML sind ein vollständig geprüftes Quartal, beide Bestätigungen
+            und eine gültige 9-stellige Steuernummer erforderlich.
+          </p>
+        )}
+      </section>
+      <section className="card">
+        <div className="sectionTitle">
+          <span>02</span>
+          <div>
+            <h2>Übermittlung Schritt für Schritt</h2>
+          </div>
+        </div>
+        <div className="submitTimeline">
+          <article>
+            <b>1</b>
+            <div>
+              <h3>UVA U30</h3>
+              <p>
+                FinanzOnline → Eingaben → Übermittlung →
+                Umsatzsteuervoranmeldung → XML auswählen →
+                Produktionsübermittlung.
+              </p>
+            </div>
+          </article>
+          <article>
+            <b>2</b>
+            <div>
+              <h3>ZM U13</h3>
+              <p>
+                Eingaben → Übermittlung → Zusammenfassende Meldung → U13-XML
+                auswählen → Produktionsübermittlung.
+              </p>
+            </div>
+          </article>
+          <article>
+            <b>3</b>
+            <div>
+              <h3>Protokoll</h3>
+              <p>
+                Nachrichten → Übermittlungsprotokoll. Erst die positive
+                inhaltliche Rückmeldung bestätigt die Abgabe.
+              </p>
+            </div>
+          </article>
+          <article>
+            <b>4</b>
+            <div>
+              <h3>Ablage</h3>
+              <p>
+                XML, positives Protokoll, Prüfbericht und Originalreports
+                aufbewahren. Belege normalerweise nicht ungefragt mitsenden.
+              </p>
+            </div>
+          </article>
+        </div>
+      </section>
+      <section className="card">
+        <h2>Berichtigung und verspäteter Apple-Bericht</h2>
+        <p>
+          Kommt nach der ursprünglichen Abgabe noch ein vollständigerer
+          Apple-Bericht für 28.–30. Juni, wird die ZM nicht nur um die Differenz
+          ergänzt. Eine berichtigte ZM enthält erneut die vollständigen Q2-Werte
+          aller betroffenen Geschäftspartner. Die UVA wird nur berichtigt, wenn
+          sich tatsächlich eine UVA-Kennzahl ändert.
+        </p>
+      </section>
+      <section className="sourceLinks">
+        <a
+          href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/softwarehersteller-erklarungen-und-antraege.html"
+          target="_blank"
+        >
+          BMF U30/U13-Strukturen ↗
+        </a>
+        <a
+          href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/datenstromuebermittlung.html"
+          target="_blank"
+        >
+          BMF Datenstromübermittlung ↗
+        </a>
+      </section>
+    </>
+  );
+}

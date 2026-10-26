@@ -1,45 +1,57 @@
 "use client";
 
 import Link from "next/link";
-import {usePathname} from "next/navigation";
-import {StoredNotice, useUst} from "./UstProvider";
-import {useBooks} from "./BookkeepingProvider";
+import { usePathname } from "next/navigation";
+import { StoredNotice, useUst } from "./UstProvider";
+import { useBooks } from "./BookkeepingProvider";
 
 const workflow = [
-  {href: "/", label: "Übersicht"},
-  {href: "/kontakte", label: "Kunden & Lieferanten"},
-  {href: "/produkte", label: "Produkte & Leistungen"},
-  {href: "/dokumente", label: "Dokumente & Zahlungen"},
-  {href: "/buchungen", label: "Buchungen"},
-  {href: "/ki-import", label: "Gemini Belegimport"},
-  {href: "/berechnung", label: "Optionale Importe"},
-  {href: "/steuer", label: "Steuer-Auswertung"},
-  {href: "/jahresabschluss", label: "Jahresabschluss"},
-  {href: "/breakdown", label: "Berechnungsdetails"},
-  {href: "/finanzonline", label: "UVA/ZM · XML"},
-  {href: "/einstellungen", label: "Einstellungen & Backup"},
+  { href: "/berechnung", label: "Quartalsdurchlauf" },
+  { href: "/finanzonline", label: "UVA/ZM · Abgabe" },
+  { href: "/breakdown", label: "Berechnungsdetails" },
+  { href: "/einstellungen", label: "Einstellungen & Backup" },
+];
+const bookkeeping = [
+  { href: "/", label: "Jahresübersicht" },
+  { href: "/kontakte", label: "Kunden & Lieferanten" },
+  { href: "/produkte", label: "Produkte & Leistungen" },
+  { href: "/dokumente", label: "Dokumente & Zahlungen" },
+  { href: "/buchungen", label: "Buchungen" },
+  { href: "/ki-import", label: "Gemini Belegimport" },
+
+  { href: "/steuer", label: "Steuer-Auswertung" },
+  { href: "/jahresabschluss", label: "Jahresabschluss" },
 ];
 const knowledge = [
-  {href: "/lernen", label: "Steuer-Grundlagen"},
-  {href: "/google", label: "Google-Import"},
-  {href: "/apple", label: "Apple-Import"},
-  {href: "/appodeal", label: "Appodeal-Import"},
+  { href: "/lernen", label: "Steuer-Grundlagen" },
+  { href: "/google", label: "Google-Import" },
+  { href: "/apple", label: "Apple-Import" },
+  { href: "/appodeal", label: "Appodeal-Import" },
 ];
 
-export default function Shell({children}: {children: React.ReactNode}) {
+export default function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
-  const {reset} = useUst();
-  const {clearBooks} = useBooks();
+  const { reset } = useUst();
+  const { clearBooks } = useBooks();
   async function resetAll() {
-    if (!confirm("Alle lokal gespeicherten Buchungen, Dateien und Einstellungen löschen?"))
+    if (
+      !confirm(
+        "Alle lokal gespeicherten Buchungen, Dateien und Einstellungen löschen?",
+      )
+    )
       return;
     clearBooks();
     localStorage.removeItem("steuernrechner-gemini-key-v1");
     await reset(true);
   }
-  const navLink = (item: {href: string; label: string}) => (
+  const navLink = (item: { href: string; label: string }) => (
     <Link
-      className={path === item.href || (item.href === "/berechnung" && path === "/dateien") ? "active" : ""}
+      className={
+        path === item.href ||
+        (item.href === "/berechnung" && path === "/dateien")
+          ? "active"
+          : ""
+      }
       href={item.href}
       key={item.href}
     >
@@ -50,15 +62,26 @@ export default function Shell({children}: {children: React.ReactNode}) {
   return (
     <>
       <header className="topbar">
-        <Link href="/" className="brand"><span className="mark">§</span><span>Steuernrechner <b>Österreich</b></span></Link>
+        <Link href="/" className="brand">
+          <span className="mark">§</span>
+          <span>
+            Steuernrechner <b>Österreich</b>
+          </span>
+        </Link>
         <StoredNotice />
-        <button className="ghost danger" onClick={() => void resetAll()}>Lokale Daten löschen</button>
+        <button className="ghost danger" onClick={() => void resetAll()}>
+          Lokale Daten löschen
+        </button>
       </header>
       <div className="appFrame">
         <aside className="sidebar">
           <div className="navGroup">
-            <p>ARBEITSBEREICH</p>
+            <p>DEINE QUARTALSMELDUNG</p>
             {workflow.map(navLink)}
+            <details>
+              <summary>Weitere Buchhaltung</summary>
+              {bookkeeping.map(navLink)}
+            </details>
           </div>
           <div className="navGroup knowledgeGroup">
             <p>WISSEN & IMPORT-HILFE</p>
@@ -66,16 +89,32 @@ export default function Shell({children}: {children: React.ReactNode}) {
           </div>
           <div className="localBox">
             <b>Lokal gespeichert</b>
-            <span>Buchhaltungsdaten bleiben in diesem Browser. Nur beim optionalen Gemini-Import wird der gewählte Beleg an Google gesendet.</span>
+            <span>
+              Buchhaltungsdaten bleiben in diesem Browser. Nur beim optionalen
+              Gemini-Import wird der gewählte Beleg an Google gesendet.
+            </span>
           </div>
         </aside>
         <div className="content">
           {children}
           <footer>
-            <p>Rechen- und Lernhilfe, keine Steuerberatung. Vor Abgabe Werte und FinanzOnline-Protokoll kontrollieren.</p>
+            <p>
+              Rechen- und Lernhilfe, keine Steuerberatung. Vor Abgabe Werte und
+              FinanzOnline-Protokoll kontrollieren.
+            </p>
             <div>
-              <a href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/softwarehersteller-erklarungen-und-antraege.html" target="_blank">BMF XML</a>
-              <a href="https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick.html" target="_blank">USP Umsatzsteuer</a>
+              <a
+                href="https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/softwarehersteller-erklarungen-und-antraege.html"
+                target="_blank"
+              >
+                BMF XML
+              </a>
+              <a
+                href="https://www.usp.gv.at/themen/steuern-finanzen/umsatzsteuer-ueberblick.html"
+                target="_blank"
+              >
+                USP Umsatzsteuer
+              </a>
             </div>
           </footer>
         </div>
