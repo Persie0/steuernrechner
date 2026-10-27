@@ -36,7 +36,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   async function resetAll() {
     if (
       !confirm(
-        "Alle lokal gespeicherten Buchungen, Dateien und Einstellungen löschen?",
+        "Alle lokal gespeicherten Buchungen, Dateien, Einstellungen und API-Zugänge löschen?",
       )
     )
       return;

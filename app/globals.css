@@ -140,6 +140,18 @@ body{background:#f3efe5}.topbar{padding:0 24px;height:68px;background:rgba(255,2
   gap: 6px;
   margin: 24px 0;
 }
+.providerPanel { margin: 20px 0; padding: 18px; border: 1px solid #c9d9ce; border-radius: 12px; background: #f5f8f2; }
+.providerPanel h3 { margin: 0 0 8px; }
+.providerPanel p, .providerPanel li { font-size: 13px; line-height: 1.5; }
+.providerPanel details { padding: 12px 0; border-top: 1px solid #d5ded7; }
+.providerPanel summary { cursor: pointer; font-weight: 700; }
+.providerFields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.providerFields label { display: grid; gap: 5px; font-size: 13px; font-weight: 700; min-width: 0; }
+.providerFields input { width: 100%; min-width: 0; border: 1px solid #b8c8bd; border-radius: 8px; padding: 8px; background: white; font-weight: 400; }
+.providerFields small { color: #626c65; font-weight: 400; }
+.providerActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.providerActions .uploadBtn { padding: 8px 12px; font-size: 13px; }
+.providerActions button:disabled { opacity: .6; cursor: wait; }
 .quarterSuggestions {
   margin: 20px 0;
   padding: 16px;

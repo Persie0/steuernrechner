@@ -214,7 +214,8 @@ export function detectSource(name: string, text = ""): Source {
     /^Transaction Date\tSettlement Date\t/m.test(text)
   )
     return "apple_financial";
-  if (/^S_M_/i.test(name)) return "apple_sales";
+  if (/^S_[DM]_/i.test(name) || /^Provider\tProvider Country\t/m.test(text))
+    return "apple_sales";
   if (
     /Nur.Ausgaben.*\.csv$/i.test(name) ||
     text.includes("Netto-Buchungsbetrag")
