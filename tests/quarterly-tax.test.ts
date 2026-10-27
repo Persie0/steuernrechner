@@ -47,6 +47,45 @@ test("identical content has the same digest even after renaming", async () => {
   assert.equal(a.record.id, b.record.id);
 });
 
+test("expense inspection reuses text extracted during recognition", async () => {
+  const result = await inspectFile(
+    "expense",
+    new File(["Already decoded"], "Invoice-0007.pdf"),
+    {
+      text: "Invoice OpenAI Ireland Limited Date of issue September 30, 2026 €19.17 due September 30, 2026 ChatGPT Plus Subscription Sep 30–Oct 30, 2026 Total €19.17 Tax to be paid on reverse charge basis",
+    },
+  );
+  assert.equal(result.record.level, "warn");
+  assert.equal(result.record.expenses?.length, 1);
+  assert.equal(result.record.expenses?.[0].net, 19.17);
+});
+
+test("Apple inspection reports exchange-rate work and honours a cancelled request", async () => {
+  const original = globalThis.fetch;
+  const controller = new AbortController();
+  const stages: string[] = [];
+  globalThis.fetch = async (_input, init) => {
+    controller.abort();
+    assert.equal(init?.signal?.aborted, true);
+    throw new DOMException("Cancelled", "AbortError");
+  };
+  try {
+    const file = new File(
+      [
+        "Start Date\t07/01/2026\nEnd Date\t07/31/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n07/10/2026\t07/10/2026\tGB\t1\t10\t10\tGBP\tS\n",
+      ],
+      "FD_progress_0726.txt",
+    );
+    await inspectFile("apple_financial", file, {
+      signal: controller.signal,
+      onProgress: (stage) => stages.push(stage),
+    });
+    assert.ok(stages.includes("exchange_rates"));
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("English invoice dates keep their calendar day in Vienna", () => {
   process.env.TZ = "Europe/Vienna";
   assert.equal(isoDate("May 30, 2026"), "2026-05-30");
@@ -111,18 +150,37 @@ test("domestic turnover is a tax base, and U30 includes the 20 percent output ta
   assert.match(xml, /<KZ022 type="kz">100.00<\/KZ022>/);
 });
 
-test("ZM sums by UID before dropping cents",()=>{
- const xml=u13Xml(2026,2,"123456789","123456789",[{uid:"IE1234567A",name:"test",exact:1.6},{uid:"IE1234567A",name:"test",exact:2.6}]);
- assert.equal((xml.match(/<ZM>/g)||[]).length,1);
- assert.match(xml,/<SUM_BGL type="kz">4<\/SUM_BGL>/);
+test("ZM sums by UID before dropping cents", () => {
+  const xml = u13Xml(2026, 2, "123456789", "123456789", [
+    { uid: "IE1234567A", name: "test", exact: 1.6 },
+    { uid: "IE1234567A", name: "test", exact: 2.6 },
+  ]);
+  assert.equal((xml.match(/<ZM>/g) || []).length, 1);
+  assert.match(xml, /<SUM_BGL type="kz">4<\/SUM_BGL>/);
 });
 
-test("Apple uses the last rate on the transaction day rather than financial month end",async()=>{
- const original=globalThis.fetch;
- globalThis.fetch=async()=>Response.json({rates:{GBP:[{date:"2026-06-28",rate:2},{date:"2026-07-31",rate:4}]},sources:{GBP:"EZB"}});
- try{
- const file=new File([`Start Date\t06/28/2026\nEnd Date\t08/01/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n06/29/2026\t06/29/2026\tGB\t1\t10\t10\tGBP\tS\n`],"FD_test_0726.txt");
- const {record}=await inspectFile("apple_financial",file);
- assert.equal(reportContribution(record,2026,2).appleZm,5);
- }finally{globalThis.fetch=original;}
+test("Apple uses the last rate on the transaction day rather than financial month end", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () =>
+    Response.json({
+      rates: {
+        GBP: [
+          { date: "2026-06-28", rate: 2 },
+          { date: "2026-07-31", rate: 4 },
+        ],
+      },
+      sources: { GBP: "EZB" },
+    });
+  try {
+    const file = new File(
+      [
+        `Start Date\t06/28/2026\nEnd Date\t08/01/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n06/29/2026\t06/29/2026\tGB\t1\t10\t10\tGBP\tS\n`,
+      ],
+      "FD_test_0726.txt",
+    );
+    const { record } = await inspectFile("apple_financial", file);
+    assert.equal(reportContribution(record, 2026, 2).appleZm, 5);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

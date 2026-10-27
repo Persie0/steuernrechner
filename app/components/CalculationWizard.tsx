@@ -1,10 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { formatBytes, useUst, type UploadFeedback } from "./UstProvider";
 import { money, vatBalance, type ExpenseDraft } from "../lib/tax";
 import { quarterDates } from "../lib/quarterly";
+import {
+  reportQuarterHint,
+  summarizeReportQuarters,
+} from "../lib/quarter-hints";
+import ImportProgressPanel, { importIsActive } from "./ImportProgressPanel";
 
 const monthNames = [
   "Jänner",
@@ -180,7 +185,11 @@ export default function CalculationWizard() {
     setYear,
     setQuarter,
     reports,
+    expenseOverrides,
     importFiles,
+    importProgress,
+    importFeedback,
+    cancelImport,
     removeReport,
     downloadReport,
     downloadAllReports,
@@ -197,7 +206,7 @@ export default function CalculationWizard() {
     setRows,
   } = useUst();
   const [step, setStep] = useState(1),
-    [busy, setBusy] = useState(false),
+    [uploadPending, setBusy] = useState(false),
     [feedback, setFeedback] = useState<UploadFeedback[]>([]),
     [showFiles, setShowFiles] = useState(false),
     [showCorrection, setShowCorrection] = useState(false);
@@ -205,6 +214,16 @@ export default function CalculationWizard() {
     months = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3];
   const balance = vatBalance(values),
     ready = filingBlockers.length === 0;
+  const quarterSummary = useMemo(
+    () => summarizeReportQuarters(reports, expenseOverrides),
+    [reports, expenseOverrides],
+  );
+  const busy = uploadPending || importIsActive(importProgress);
+  const visibleFeedback = busy
+    ? importFeedback
+    : feedback.length
+      ? feedback
+      : importFeedback;
   const go = (n: number) => {
     setStep(n);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -281,6 +300,7 @@ export default function CalculationWizard() {
           <button
             key={s}
             className={step === i + 1 ? "active" : step > i + 1 ? "done" : ""}
+            disabled={busy}
             onClick={() => go(i + 1)}
           >
             <span>{i + 1}</span>
@@ -374,7 +394,7 @@ export default function CalculationWizard() {
           >
             <b>
               {busy
-                ? "Dateien werden lokal gelesen …"
+                ? "Import läuft · Fortschritt siehe unten"
                 : "ZIP, CSV, TXT, PDF oder XLSX hier ablegen"}
             </b>
             <span>
@@ -396,6 +416,57 @@ export default function CalculationWizard() {
               />
             </label>
           </div>
+          <ImportProgressPanel
+            progress={importProgress}
+            feedback={importFeedback}
+            onCancel={cancelImport}
+          />
+          {reports.length > 0 && (
+            <section
+              className="quarterSuggestions"
+              aria-label="Erkannte Quartale"
+            >
+              <strong>Erkannte Quartale</strong>
+              <p>
+                Orientierung anhand der Berichte und Belegdaten. Apple-Berichte
+                können mehrere Quartale betreffen. Die steuerliche Zuordnung und
+                Ausgaben bitte weiterhin prüfen.
+              </p>
+              <div>
+                {quarterSummary.groups.map((group) => (
+                  <button
+                    type="button"
+                    key={`${group.year}-${group.quarter}`}
+                    className={
+                      year === group.year && quarter === group.quarter
+                        ? "selected"
+                        : ""
+                    }
+                    aria-pressed={
+                      year === group.year && quarter === group.quarter
+                    }
+                    disabled={busy}
+                    onClick={() => {
+                      setYear(group.year);
+                      setQuarter(group.quarter);
+                    }}
+                  >
+                    Q{group.quarter}/{group.year} · {group.count}{" "}
+                    {group.count === 1 ? "Datei" : "Dateien"}
+                  </button>
+                ))}
+              </div>
+              {quarterSummary.unknown > 0 && (
+                <small>
+                  {quarterSummary.unknown}{" "}
+                  {quarterSummary.unknown === 1
+                    ? "Datei konnte"
+                    : "Dateien konnten"}{" "}
+                  keinem Quartal zugeordnet werden.
+                </small>
+              )}
+            </section>
+          )}
           <div className="reportChecklist">
             <p>
               <b>Google:</b> Earnings CSV für{" "}
@@ -410,6 +481,13 @@ export default function CalculationWizard() {
               bis {to} nötig.
             </p>
             <p>
+              <b>Wechselkurse:</b> „InforEuro nur Schätzung“ ist kein
+              Lesefehler. Für diese Währungen einen zulässigen Kursbeleg prüfen
+              oder in Schritt 4 eine auf das Kalenderquartal abgestimmte
+              EUR-Summe mit Belegreferenz ergänzen. Eine Bankauszahlung allein
+              belegt die ZM-Quartalssumme nicht.
+            </p>
+            <p>
               <b>Ausgaben:</b> Originalrechnungen oder „Nur Ausgaben“-CSV.
               Beides zusammen wird nach Lieferant, Datum und Betrag abgeglichen.
               Gescannte oder unbekannte Belege bitte in Schritt 3 manuell
@@ -421,14 +499,23 @@ export default function CalculationWizard() {
               automatische UVA-/ZM-Buchung.
             </p>
           </div>
-          {feedback.length > 0 && (
-            <details className="uploadFeedback" open>
-              <summary>{feedback.length} Importmeldungen</summary>
-              {feedback.map((f, i) => (
-                <p className={f.level} key={i}>
-                  {f.message}
-                </p>
-              ))}
+          {visibleFeedback.length > 0 && (
+            <details className="uploadFeedback" open={!busy}>
+              <summary>
+                {visibleFeedback.length} Importmeldungen · Details anzeigen
+              </summary>
+              {visibleFeedback.map((f, i) =>
+                f.message.length > 220 ? (
+                  <details className={f.level} key={i}>
+                    <summary>{f.message.slice(0, 200)} …</summary>
+                    <p>{f.message}</p>
+                  </details>
+                ) : (
+                  <p className={f.level} key={i}>
+                    {f.message}
+                  </p>
+                ),
+              )}
             </details>
           )}
           <button
@@ -447,6 +534,9 @@ export default function CalculationWizard() {
                     <small>
                       {r.source} · {formatBytes(r.size)}
                     </small>
+                    <small>
+                      {reportQuarterHint(r, expenseOverrides).label}
+                    </small>
                     <p>{r.message}</p>
                   </div>
                   <button onClick={() => void downloadReport(r.id)}>
@@ -454,6 +544,7 @@ export default function CalculationWizard() {
                   </button>
                   <button
                     className="danger"
+                    disabled={busy}
                     onClick={() => void removeReport(r.id)}
                   >
                     Entfernen

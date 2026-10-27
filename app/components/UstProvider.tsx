@@ -15,25 +15,25 @@ import {
   PARSER_VERSION,
   ExpenseDraft,
   periodKey,
-  extractPdfText,
   Source,
   StoredReport,
   Values,
   ZmRow,
-  ZERO,
 } from "../lib/tax";
 
 import {
-  detectSource,
   emptyReview,
   summarizeQuarter,
   type QuarterReview,
 } from "../lib/quarterly";
 
-export type UploadFeedback = {
-  level: "ok" | "warn" | "error";
-  message: string;
-};
+import {
+  expandImportFiles,
+  importDocumentBatch,
+  type ImportProgress,
+  type UploadFeedback,
+} from "../lib/importer";
+export type { UploadFeedback } from "../lib/importer";
 type Edit = { values: Values; rows: ZmRow[] };
 type Store = {
   year: number;
@@ -47,6 +47,9 @@ type Store = {
 };
 type Ctx = Store & {
   ready: boolean;
+  importProgress: ImportProgress | null;
+  importFeedback: UploadFeedback[];
+  cancelImport: () => void;
   values: Values;
   rows: ZmRow[];
   warnings: string[];
@@ -141,6 +144,15 @@ async function clearDb() {
 export function UstProvider({ children }: { children: React.ReactNode }) {
   const [s, setS] = useState<Store>(initial),
     [ready, setReady] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(
+    null,
+  );
+  const [importFeedback, setImportFeedback] = useState<UploadFeedback[]>([]);
+  const importController = useRef<AbortController | null>(null);
+  const reportsRef = useRef(s.reports);
+  useEffect(() => {
+    reportsRef.current = s.reports;
+  }, [s.reports]);
   const migrationStarted = useRef(false),
     importQueue = useRef(Promise.resolve());
   useEffect(() => {
@@ -268,244 +280,244 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       },
     }));
   };
-  async function importBatch(
-    files: File[],
+  async function enqueueImport(
+    input: File[],
     source?: Source,
   ): Promise<UploadFeedback[]> {
-    const feedback: UploadFeedback[] = [],
-      parsed: { record: StoredReport; blob: Blob }[] = [];
-    const existing = new Set(s.reports.map((r) => r.sha256).filter(Boolean));
-    for (const file of files) {
-      if (file.size > 50 * 1024 * 1024) {
-        feedback.push({
-          level: "error",
-          message: `${file.name}: maximal 50 MB je Datei.`,
-        });
-        continue;
-      }
-      try {
-        let detected = source;
-        if (!detected) {
-          let text = "";
-          if (/\.(csv|txt)$/i.test(file.name)) text = await file.text();
-          else if (/\.pdf$/i.test(file.name) && !/^report_/.test(file.name))
-            text = await extractPdfText(await file.arrayBuffer());
-          detected = detectSource(file.name, text);
-        }
-        const value = await inspectFile(detected, file);
-        if (value.record.sha256 && existing.has(value.record.sha256)) {
-          feedback.push({
-            level: "warn",
-            message: `${file.name}: identischer Inhalt bereits vorhanden, nicht doppelt gerechnet.`,
-          });
-          continue;
-        }
-        if (value.record.level !== "error") {
-          existing.add(value.record.sha256);
-          await putFile(value.record, value.blob);
-          parsed.push(value);
-        }
-        feedback.push({
-          level: value.record.level,
-          message: `${file.name}: ${value.record.message}`,
-        });
-      } catch (e) {
-        feedback.push({
-          level: "error",
-          message: `${file.name}: ${e instanceof Error ? e.message : "Import fehlgeschlagen"}`,
-        });
-      }
-    }
-    if (parsed.length)
-      setS((c) => {
-        const hashes = new Set(c.reports.map((r) => r.sha256).filter(Boolean));
-        const added = parsed
-          .filter((p) => !p.record.sha256 || !hashes.has(p.record.sha256))
-          .map((p) => p.record);
-        return {
-          ...c,
-          reports: [...c.reports, ...added],
-          reviews: Object.fromEntries(
-            Object.entries(c.reviews).map(([k, v]) => [
-              k,
-              { ...v, reviewed: false },
-            ]),
-          ),
-        };
-      });
-    return feedback;
-  }
-  async function importFiles(list: FileList | null): Promise<UploadFeedback[]> {
-    if (!list?.length) return [];
-    const input = Array.from(list),
-      files: File[] = [],
-      messages: UploadFeedback[] = [];
-    for (const file of input) {
-      if (!/\.zip$/i.test(file.name)) {
-        files.push(file);
-        continue;
-      }
-      if (file.size > 100 * 1024 * 1024) {
-        messages.push({
-          level: "error",
-          message: `${file.name}: ZIP maximal 100 MB.`,
-        });
-        continue;
-      }
-      const { default: JSZip } = await import("jszip"),
-        zip = await JSZip.loadAsync(file);
-      let total = 0,
-        count = 0;
-      for (const entry of Object.values(zip.files)) {
-        if (entry.dir || /(?:^|\/)__MACOSX\/|(?:^|\/)\./.test(entry.name))
-          continue;
-        if (++count > 500) {
-          messages.push({
-            level: "error",
-            message: "ZIP: maximal 500 Dateien.",
-          });
-          break;
-        }
-        const bytes = await entry.async("uint8array");
-        total += bytes.length;
-        if (total > 100 * 1024 * 1024) {
-          messages.push({
-            level: "error",
-            message: "ZIP: entpackter Inhalt über 100 MB.",
-          });
-          break;
-        }
-        const basename = entry.name.split("/").pop() || entry.name;
-        files.push(
-          new File([bytes as BlobPart], basename, {
-            lastModified: entry.date.getTime(),
-          }),
-        );
-      }
-    }
-    let backup: Partial<Store> | undefined;
-    for (const file of files.filter(
-      (f) => f.name === "quartalskontrolle.json",
-    )) {
-      try {
-        const payload = JSON.parse(await file.text());
-        if (
-          payload.version !== 1 ||
-          payload.parserVersion !== PARSER_VERSION ||
-          !payload.state ||
-          typeof payload.state !== "object"
-        )
-          throw new Error("Unbekanntes Backup-Format.");
-        const state = payload.state;
-        const expenseOverrides: Record<string, ExpenseDraft> = {};
-        for (const [id, e] of Object.entries(state.expenseOverrides || {}) as [
-          string,
-          ExpenseDraft,
-        ][]) {
-          if (
-            typeof e.title !== "string" ||
-            typeof e.date !== "string" ||
-            ![e.net, e.vat, e.share].every(Number.isFinite) ||
-            e.share < 0 ||
-            e.share > 100 ||
-            !["domestic", "reverse_charge", "none", "review"].includes(
-              e.vatCase,
-            )
-          )
-            throw new Error("Ungültige Ausgabe im Backup.");
-          expenseOverrides[id] = { ...e, confirmed: false };
-        }
-        const reviews: Record<string, QuarterReview> = {};
-        for (const [period, r] of Object.entries(state.reviews || {}) as [
-          string,
-          QuarterReview,
-        ][]) {
-          if (
-            !/^\d{4}-Q[1-4]$/.test(period) ||
-            ![
-              r.google,
-              r.apple,
-              r.appodeal,
-              r.expensesComplete,
-              r.modelConfirmed,
-            ].every((v) => typeof v === "boolean") ||
-            typeof r.appleExact !== "string" ||
-            typeof r.appleEvidence !== "string"
-          )
-            throw new Error("Ungültige Quartalsdaten im Backup.");
-          reviews[period] = { ...emptyReview(), ...r, reviewed: false };
-        }
-        const edits: Record<string, Edit> = {};
-        for (const [period, e] of Object.entries(state.edits || {}) as [
-          string,
-          Edit,
-        ][]) {
-          if (
-            !/^\d{4}-Q[1-4]$/.test(period) ||
-            !e.values ||
-            ![
-              e.values.kz000,
-              e.values.kz057,
-              e.values.kz060,
-              e.values.kz066,
-            ].every(Number.isFinite) ||
-            !Array.isArray(e.rows) ||
-            !e.rows.every(
-              (row) =>
-                typeof row.uid === "string" &&
-                typeof row.name === "string" &&
-                Number.isFinite(row.exact),
-            )
-          )
-            throw new Error("Ungültige Korrekturwerte im Backup.");
-          edits[period] = e;
-        }
-        backup = { expenseOverrides, reviews, edits };
-        if (/^\d{9}$/.test(state.tax)) backup.tax = state.tax;
-        if (/^\d{9}$/.test(state.submitter)) backup.submitter = state.submitter;
-        if (
-          Number.isInteger(state.year) &&
-          state.year >= 2024 &&
-          state.year <= 2100
-        )
-          backup.year = state.year;
-        if ([1, 2, 3, 4].includes(state.quarter))
-          backup.quarter = state.quarter;
-        messages.push({
-          level: "ok",
-          message:
-            "Quartalsstand wiederhergestellt; Originale werden neu berechnet und Bestätigungen müssen erneut geprüft werden.",
-        });
-      } catch (e) {
-        messages.push({
-          level: "error",
-          message:
-            e instanceof Error
-              ? e.message
-              : "Backup konnte nicht gelesen werden.",
-        });
-      }
-    }
+    if (!input.length) return [];
     let feedback: UploadFeedback[] = [];
     const task = importQueue.current.then(async () => {
-      feedback = await importBatch(
-        files.filter((f) => f.name !== "quartalskontrolle.json"),
-      );
-      if (backup)
-        setS((c) => ({
-          ...c,
-          ...backup,
-          expenseOverrides: {
-            ...c.expenseOverrides,
-            ...backup.expenseOverrides,
-          },
-          reviews: { ...c.reviews, ...backup.reviews },
-          edits: { ...c.edits, ...backup.edits },
-        }));
+      const controller = new AbortController();
+      importController.current = controller;
+      const startedAt = Date.now();
+      const messages: UploadFeedback[] = [];
+      const progress = (value: ImportProgress) =>
+        setImportProgress({ ...value, startedAt, updatedAt: Date.now() });
+      const report = (value: UploadFeedback) => {
+        messages.push(value);
+        setImportFeedback((current) => [...current, value]);
+      };
+      setImportFeedback([]);
+      progress({
+        stage: "queued",
+        currentFile: input[0].name,
+        detail: "Import vorbereiten",
+        completed: 0,
+        total: input.length,
+      });
+      try {
+        const { files } = await expandImportFiles(input, {
+          signal: controller.signal,
+          onProgress: progress,
+          onFeedback: report,
+        });
+        let backup: Partial<Store> | undefined;
+        for (const file of files.filter(
+          (f) => f.name === "quartalskontrolle.json",
+        )) {
+          try {
+            const payload = JSON.parse(await file.text());
+            if (
+              payload.version !== 1 ||
+              payload.parserVersion !== PARSER_VERSION ||
+              !payload.state ||
+              typeof payload.state !== "object"
+            )
+              throw new Error("Unbekanntes Backup-Format.");
+            const state = payload.state;
+            const expenseOverrides: Record<string, ExpenseDraft> = {};
+            for (const [id, e] of Object.entries(
+              state.expenseOverrides || {},
+            ) as [string, ExpenseDraft][]) {
+              if (
+                typeof e.title !== "string" ||
+                typeof e.date !== "string" ||
+                ![e.net, e.vat, e.share].every(Number.isFinite) ||
+                e.share < 0 ||
+                e.share > 100 ||
+                !["domestic", "reverse_charge", "none", "review"].includes(
+                  e.vatCase,
+                )
+              )
+                throw new Error("Ungültige Ausgabe im Backup.");
+              expenseOverrides[id] = { ...e, confirmed: false };
+            }
+            const reviews: Record<string, QuarterReview> = {};
+            for (const [period, r] of Object.entries(state.reviews || {}) as [
+              string,
+              QuarterReview,
+            ][]) {
+              if (
+                !/^\d{4}-Q[1-4]$/.test(period) ||
+                ![
+                  r.google,
+                  r.apple,
+                  r.appodeal,
+                  r.expensesComplete,
+                  r.modelConfirmed,
+                ].every((v) => typeof v === "boolean") ||
+                typeof r.appleExact !== "string" ||
+                typeof r.appleEvidence !== "string"
+              )
+                throw new Error("Ungültige Quartalsdaten im Backup.");
+              reviews[period] = { ...emptyReview(), ...r, reviewed: false };
+            }
+            const edits: Record<string, Edit> = {};
+            for (const [period, e] of Object.entries(state.edits || {}) as [
+              string,
+              Edit,
+            ][]) {
+              if (
+                !/^\d{4}-Q[1-4]$/.test(period) ||
+                !e.values ||
+                ![
+                  e.values.kz000,
+                  e.values.kz057,
+                  e.values.kz060,
+                  e.values.kz066,
+                ].every(Number.isFinite) ||
+                !Array.isArray(e.rows) ||
+                !e.rows.every(
+                  (row) =>
+                    typeof row.uid === "string" &&
+                    typeof row.name === "string" &&
+                    Number.isFinite(row.exact),
+                )
+              )
+                throw new Error("Ungültige Korrekturwerte im Backup.");
+              edits[period] = e;
+            }
+            backup = { expenseOverrides, reviews, edits };
+            if (/^\d{9}$/.test(state.tax)) backup.tax = state.tax;
+            if (/^\d{9}$/.test(state.submitter))
+              backup.submitter = state.submitter;
+            if (
+              Number.isInteger(state.year) &&
+              state.year >= 2024 &&
+              state.year <= 2100
+            )
+              backup.year = state.year;
+            if ([1, 2, 3, 4].includes(state.quarter))
+              backup.quarter = state.quarter;
+            report({
+              level: "ok",
+              message:
+                "Quartalsstand wiederhergestellt; Originale werden neu berechnet und Bestätigungen müssen erneut geprüft werden.",
+            });
+          } catch (e) {
+            report({
+              level: "error",
+              message:
+                e instanceof Error
+                  ? e.message
+                  : "Backup konnte nicht gelesen werden.",
+            });
+          }
+        }
+
+        const documents = files.filter(
+          (file) => file.name !== "quartalskontrolle.json",
+        );
+        const result = await importDocumentBatch(documents, {
+          source,
+          existingHashes: new Set(
+            reportsRef.current
+              .map((record) => record.sha256)
+              .filter((hash): hash is string => !!hash),
+          ),
+          existingReports: reportsRef.current,
+          signal: controller.signal,
+          onProgress: progress,
+          onFeedback: report,
+          save: putFile,
+        });
+        const merge = (current: StoredReport[]) => {
+          const hashes = new Set(
+            current.map((record) => record.sha256).filter(Boolean),
+          );
+          return [
+            ...current,
+            ...result.records.filter(
+              (record) => !record.sha256 || !hashes.has(record.sha256),
+            ),
+          ];
+        };
+        if (result.records.length || (!result.cancelled && backup)) {
+          reportsRef.current = merge(reportsRef.current);
+          setS((current) => {
+            const restored = !result.cancelled ? backup : undefined;
+            return {
+              ...current,
+              ...restored,
+              reports: merge(current.reports),
+              expenseOverrides: {
+                ...current.expenseOverrides,
+                ...restored?.expenseOverrides,
+              },
+              reviews: Object.fromEntries(
+                Object.entries({
+                  ...current.reviews,
+                  ...restored?.reviews,
+                }).map(([period, value]) => [
+                  period,
+                  { ...value, reviewed: false },
+                ]),
+              ),
+              edits: { ...current.edits, ...restored?.edits },
+            };
+          });
+        }
+        const errors = messages.filter(
+          (message) => message.level === "error",
+        ).length;
+        setImportProgress(
+          (current) =>
+            current && {
+              ...current,
+              total: documents.length,
+              completed: result.cancelled
+                ? current.completed
+                : documents.length,
+              stage: result.cancelled
+                ? "cancelled"
+                : errors && !documents.length
+                  ? "error"
+                  : "done",
+              updatedAt: Date.now(),
+              detail: `${result.records.length} Dateien gespeichert${errors ? ` · ${errors} Fehler` : ""}${result.cancelled ? ". Bereits fertige Dateien bleiben erhalten." : "."}`,
+            },
+        );
+      } catch (error) {
+        const cancelled = controller.signal.aborted;
+        if (!cancelled)
+          report({
+            level: "error",
+            message:
+              error instanceof Error ? error.message : "Import fehlgeschlagen",
+          });
+        setImportProgress(
+          (current) =>
+            current && {
+              ...current,
+              stage: cancelled ? "cancelled" : "error",
+              updatedAt: Date.now(),
+              detail: cancelled
+                ? "Import gestoppt. Bereits fertige Dateien bleiben erhalten."
+                : "Import konnte nicht abgeschlossen werden. Ergebnisse unten prüfen.",
+            },
+        );
+      } finally {
+        if (importController.current === controller)
+          importController.current = null;
+        feedback = messages;
+      }
     });
     importQueue.current = task.catch(() => {});
     await task;
-    return [...messages, ...feedback];
+    return feedback;
+  }
+  async function importFiles(list: FileList | null) {
+    return enqueueImport(Array.from(list || []));
   }
   async function removeReport(id: string) {
     await deleteFile(id);
@@ -578,9 +590,13 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       !confirm("Alle lokalen Dateien und Quartalsdaten löschen?")
     )
       return false;
+    importController.current?.abort();
+    await importQueue.current;
     await clearDb();
     localStorage.removeItem(LS);
     setS(initial);
+    setImportProgress(null);
+    setImportFeedback([]);
     return true;
   }
   return (
@@ -588,6 +604,9 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       value={{
         ...s,
         ready,
+        importProgress,
+        importFeedback,
+        cancelImport: () => importController.current?.abort(),
         ...edit,
         totals: result.totals,
         review,
@@ -634,7 +653,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
             },
           })),
         addFiles: (source, files) =>
-          importBatch(Array.from(files || []), source),
+          enqueueImport(Array.from(files || []), source),
         importFiles,
         removeReport,
         downloadReport,

@@ -1,9 +1,10 @@
+import { fetchWithTimeout } from "../../lib/network.ts";
+
 type RatePoint = { date: string; rate: number };
 
 const ECB_HISTORY_URL =
   "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.csv";
-const ECB_DATA_URL =
-  "https://data-api.ecb.europa.eu/service/data/EXR";
+const ECB_DATA_URL = "https://data-api.ecb.europa.eu/service/data/EXR";
 const INFOEURO_URL =
   "https://ec.europa.eu/budg/inforeuro/api/public/monthly-rates";
 const ECB_HEADERS = {
@@ -11,6 +12,38 @@ const ECB_HEADERS = {
   "User-Agent":
     "ust-assistent-at/1.0 (+https://github.com/Persie0/steuernrechner)",
 };
+
+// The same multi-megabyte public history serves every report in an import.
+// Share it across requests in a warm server, including concurrent requests.
+let historyCache: { text: string; expires: number } | undefined;
+let historyPending: Promise<string> | undefined;
+async function historyText() {
+  if (historyCache && historyCache.expires > Date.now())
+    return historyCache.text;
+  if (historyPending) return historyPending;
+  historyPending = (async () => {
+    const response = await fetchWithTimeout(
+      ECB_HISTORY_URL,
+      {
+        headers: ECB_HEADERS,
+        cache: "no-store",
+      },
+      8_000,
+    );
+    if (!response.ok)
+      throw new Error(`EZB-Historie antwortete mit ${response.status}`);
+    const text = await response.text();
+    if (!text.startsWith("Date,") && !text.startsWith("\uFEFFDate,"))
+      throw new Error("Unerwartetes Format der EZB-Historie");
+    historyCache = { text, expires: Date.now() + 86_400_000 };
+    return text;
+  })();
+  try {
+    return await historyPending;
+  } finally {
+    historyPending = undefined;
+  }
+}
 
 function parseCsvLine(line: string) {
   const cells: string[] = [];
@@ -43,17 +76,20 @@ function subtractDays(date: string, days: number) {
 }
 
 async function fetchCurrency(currency: string, from: string, to: string) {
-  const url = new URL(
-    `${ECB_DATA_URL}/D.${currency}.EUR.SP00.A`,
-  );
+  const url = new URL(`${ECB_DATA_URL}/D.${currency}.EUR.SP00.A`);
   url.searchParams.set("startPeriod", subtractDays(from, 10));
   url.searchParams.set("endPeriod", to);
   url.searchParams.set("format", "csvdata");
   url.searchParams.set("detail", "dataonly");
 
-  const response = await fetch(url, {
-    headers: ECB_HEADERS,
-  });
+  const response = await fetchWithTimeout(
+    url,
+    {
+      headers: ECB_HEADERS,
+      next: { revalidate: 86400 },
+    },
+    8_000,
+  );
   if (!response.ok) {
     throw new Error(`EZB-Antwort ${response.status} für ${currency}`);
   }
@@ -80,19 +116,8 @@ async function fetchCurrency(currency: string, from: string, to: string) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-async function fetchHistory(
-  currencies: string[],
-  from: string,
-  to: string,
-) {
-  const response = await fetch(ECB_HISTORY_URL, {
-    headers: ECB_HEADERS,
-  });
-  if (!response.ok) {
-    throw new Error(`EZB-Historie antwortete mit ${response.status}`);
-  }
-
-  const lines = (await response.text()).split(/\r?\n/).filter(Boolean);
+async function fetchHistory(currencies: string[], from: string, to: string) {
+  const lines = (await historyText()).split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) throw new Error("EZB-Historie ist leer");
 
   const headers = parseCsvLine(lines[0].replace(/^\uFEFF/, "")).map((cell) =>
@@ -165,7 +190,11 @@ async function fetchInforEuroMonth(year: number, month: number) {
   const url = new URL(INFOEURO_URL);
   url.searchParams.set("year", String(year));
   url.searchParams.set("month", String(month));
-  const response = await fetch(url, { headers: ECB_HEADERS });
+  const response = await fetchWithTimeout(
+    url,
+    { headers: ECB_HEADERS, next: { revalidate: 86400 } },
+    8_000,
+  );
   if (!response.ok) {
     throw new Error(`InforEuro antwortete mit ${response.status}`);
   }
@@ -180,12 +209,7 @@ async function fetchInforEuroMonth(year: number, month: number) {
       "currencyCode",
       "currency",
     ]).toUpperCase();
-    const rate = readNumber(row, [
-      "value",
-      "rate",
-      "exchangeRate",
-      "amount",
-    ]);
+    const rate = readNumber(row, ["value", "rate", "exchangeRate", "amount"]);
     if (/^[A-Z]{3}$/.test(currency) && Number.isFinite(rate)) {
       rates[currency] = { date, rate };
     }
