@@ -33,6 +33,7 @@ import {
   type ImportProgress,
   type UploadFeedback,
 } from "../lib/importer";
+import { PROVIDER_STORAGE_KEY } from "../lib/provider-auth";
 export type { UploadFeedback } from "../lib/importer";
 type Edit = { values: Values; rows: ZmRow[] };
 type Store = {
@@ -70,7 +71,7 @@ type Ctx = Store & {
     source: Source,
     files: FileList | null,
   ) => Promise<UploadFeedback[]>;
-  importFiles: (files: FileList | null) => Promise<UploadFeedback[]>;
+  importFiles: (files: FileList | File[] | null) => Promise<UploadFeedback[]>;
   removeReport: (id: string) => Promise<void>;
   downloadReport: (id: string) => Promise<void>;
   downloadAllReports: () => Promise<number>;
@@ -178,7 +179,11 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
   }, [s, ready]);
   useEffect(() => {
     if (!ready || migrationStarted.current) return;
-    const stale = s.reports.filter((r) => r.parserVersion !== PARSER_VERSION);
+    const stale = s.reports.filter(
+      (r) =>
+        r.parserVersion !== PARSER_VERSION ||
+        (r.source === "attachment" && /^S_D_.*\.(txt|csv)$/i.test(r.name)),
+    );
     if (!stale.length) return;
     migrationStarted.current = true;
     void (async () => {
@@ -191,7 +196,14 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
             type: report.type,
             lastModified: report.lastModified,
           });
-          const parsed = await inspectFile(report.source, file);
+          const dailyAttachment =
+            report.source === "attachment" &&
+            /^S_D_.*\.(txt|csv)$/i.test(report.name);
+          const parsed = await inspectFile(
+            dailyAttachment ? "apple_sales" : report.source,
+            file,
+          );
+          if (dailyAttachment && parsed.record.level === "error") continue;
           const updated = {
             ...parsed.record,
             id: report.id,
@@ -516,7 +528,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     await task;
     return feedback;
   }
-  async function importFiles(list: FileList | null) {
+  async function importFiles(list: FileList | File[] | null) {
     return enqueueImport(Array.from(list || []));
   }
   async function removeReport(id: string) {
@@ -594,6 +606,8 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     await importQueue.current;
     await clearDb();
     localStorage.removeItem(LS);
+    localStorage.removeItem(PROVIDER_STORAGE_KEY);
+    window.dispatchEvent(new Event("provider-credentials-cleared"));
     setS(initial);
     setImportProgress(null);
     setImportFeedback([]);

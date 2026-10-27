@@ -36,7 +36,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   async function resetAll() {
     if (
       !confirm(
-        "Alle lokal gespeicherten Buchungen, Dateien und Einstellungen löschen?",
+        "Alle lokal gespeicherten Buchungen, Dateien, Einstellungen und API-Zugänge löschen?",
       )
     )
       return;
@@ -90,8 +90,10 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <div className="localBox">
             <b>Lokal gespeichert</b>
             <span>
-              Buchhaltungsdaten bleiben in diesem Browser. Nur beim optionalen
-              Gemini-Import wird der gewählte Beleg an Google gesendet.
+              Gespeicherte Buchhaltungsdaten bleiben in diesem Browser. Beim
+              optionalen Gemini-Import geht der gewählte Beleg an Google. Beim
+              Plattformabruf werden Berichte und Zugangsdaten beziehungsweise
+              Tokens über Vercel durchgeleitet.
             </span>
           </div>
         </aside>

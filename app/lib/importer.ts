@@ -1,5 +1,6 @@
 import { detectSource } from "./quarterly.ts";
 import { reportQuarterHint } from "./quarter-hints.ts";
+import { decodeReportText } from "./provider-import.ts";
 import {
   extractPdfText,
   inspectFile,
@@ -176,10 +177,9 @@ export async function importDocumentBatch(
       } else {
         let source = options.source;
         let text: string | undefined;
+        if (/\.(csv|txt)$/i.test(file.name)) text = decodeReportText(buffer);
         if (!source) {
-          if (/\.(csv|txt)$/i.test(file.name))
-            text = new TextDecoder().decode(buffer);
-          else if (/\.pdf$/i.test(file.name) && !/^report_/i.test(file.name)) {
+          if (/\.pdf$/i.test(file.name) && !/^report_/i.test(file.name)) {
             progress("reading", "PDF erkennen");
             text = await extractPdfText(buffer, {
               signal: options.signal,

@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "./network.ts";
+import { decodeReportText } from "./provider-import.ts";
 
 export type Source =
   | "google"
@@ -904,7 +905,7 @@ export async function inspectFile(
         blob: file,
       };
     }
-    const text = options.text ?? (await file.text());
+    const text = options.text ?? decodeReportText(await file.arrayBuffer());
     const p = inferPeriod(file.name, text);
     if (source === "google") {
       if (!file.name.toLowerCase().endsWith(".csv"))
@@ -976,7 +977,7 @@ export async function inspectFile(
         );
       if (summary < 0)
         throw new Error(
-          "Apple Summary Sales-Kopfzeile fehlt; erwartet wird eine S_M_-Datei mit „Provider“ und „Provider Country“.",
+          "Apple Summary Sales-Kopfzeile fehlt; erwartet wird eine S_D_- oder S_M_-Datei mit „Provider“ und „Provider Country“.",
         );
       const rs = csv(text.slice(summary));
       if (!rs.length) throw new Error("keine Verkaufszeilen");

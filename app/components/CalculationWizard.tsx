@@ -10,6 +10,7 @@ import {
   summarizeReportQuarters,
 } from "../lib/quarter-hints";
 import ImportProgressPanel, { importIsActive } from "./ImportProgressPanel";
+import ProviderImportPanel from "./ProviderImportPanel";
 
 const monthNames = [
   "Jänner",
@@ -207,6 +208,7 @@ export default function CalculationWizard() {
   } = useUst();
   const [step, setStep] = useState(1),
     [uploadPending, setBusy] = useState(false),
+    [apiBusy, setApiBusy] = useState(false),
     [feedback, setFeedback] = useState<UploadFeedback[]>([]),
     [showFiles, setShowFiles] = useState(false),
     [showCorrection, setShowCorrection] = useState(false);
@@ -218,7 +220,7 @@ export default function CalculationWizard() {
     () => summarizeReportQuarters(reports, expenseOverrides),
     [reports, expenseOverrides],
   );
-  const busy = uploadPending || importIsActive(importProgress);
+  const busy = uploadPending || apiBusy || importIsActive(importProgress);
   const visibleFeedback = busy
     ? importFeedback
     : feedback.length
@@ -420,6 +422,15 @@ export default function CalculationWizard() {
             progress={importProgress}
             feedback={importFeedback}
             onCancel={cancelImport}
+          />
+          <ProviderImportPanel
+            year={year}
+            quarter={quarter}
+            disabled={busy}
+            importFiles={importFiles}
+            cancelImport={cancelImport}
+            onBusyChange={setApiBusy}
+            onImportFeedback={setFeedback}
           />
           {reports.length > 0 && (
             <section
