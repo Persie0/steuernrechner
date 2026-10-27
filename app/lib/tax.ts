@@ -1,3 +1,5 @@
+import { fetchWithTimeout } from "./network.ts";
+
 export type Source =
   | "google"
   | "apple_sales"
@@ -530,19 +532,43 @@ export function parseExpenseText(
   return null;
 }
 
-export async function extractPdfText(buffer: ArrayBuffer) {
+export async function extractPdfText(
+  buffer: ArrayBuffer,
+  options: {
+    signal?: AbortSignal;
+    onPage?: (page: number, total: number) => void;
+  } = {},
+) {
+  options.signal?.throwIfAborted();
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
-  const pages: string[] = [];
-  for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
-    const page = await pdf.getPage(pageNo),
-      content = await page.getTextContent();
-    pages.push(
-      content.items.map((item) => ("str" in item ? item.str : "")).join(" "),
-    );
+  const task = pdfjs.getDocument({ data: new Uint8Array(buffer) });
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(45_000)])
+    : AbortSignal.timeout(45_000);
+  const cancel = () => {
+    void task.destroy();
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    signal.throwIfAborted();
+    const pdf = await task.promise;
+    const pages: string[] = [];
+    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+      signal.throwIfAborted();
+      options.onPage?.(pageNo, pdf.numPages);
+      const page = await pdf.getPage(pageNo),
+        content = await page.getTextContent();
+      pages.push(
+        content.items.map((item) => ("str" in item ? item.str : "")).join(" "),
+      );
+      page.cleanup();
+    }
+    return pages.join("\n");
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    await task.destroy();
   }
-  return pages.join("\n");
 }
 
 export function csv(text: string, separator?: string) {
@@ -704,7 +730,12 @@ function isoMonthEnd(year: number, month: number) {
   return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
 }
 
-async function exchangeRates(currencies: string[], from: string, to: string) {
+async function exchangeRates(
+  currencies: string[],
+  from: string,
+  to: string,
+  options: InspectionOptions,
+) {
   const unique = [...new Set(currencies)].sort();
   const combined: FxResponse = {
     source: "EZB / Europäische Kommission InforEuro",
@@ -713,12 +744,19 @@ async function exchangeRates(currencies: string[], from: string, to: string) {
     sources: {},
   };
   for (let index = 0; index < unique.length; index += 12) {
+    options.signal?.throwIfAborted();
+    options.onProgress?.(
+      "exchange_rates",
+      `Wechselkurse für ${unique.slice(index, index + 12).join(", ")} abrufen`,
+    );
     const query = new URLSearchParams({
       currencies: unique.slice(index, index + 12).join(","),
       from,
       to,
     });
-    const response = await fetch(`/api/exchange-rates?${query}`);
+    const response = await fetchWithTimeout(`/api/exchange-rates?${query}`, {
+      signal: options.signal,
+    });
     const payload = (await response.json()) as FxResponse;
     if (!response.ok) {
       throw new Error(
@@ -735,16 +773,27 @@ function rateOnOrBefore(points: FxPoint[] | undefined, date: string) {
   return [...(points || [])].reverse().find((point) => point.date <= date);
 }
 
+export type InspectionOptions = {
+  signal?: AbortSignal;
+  text?: string;
+  sha256?: string;
+  onProgress?: (stage: "reading" | "exchange_rates", detail: string) => void;
+};
+
 export async function inspectFile(
   source: Source,
   file: File,
+  options: InspectionOptions = {},
 ): Promise<{ record: StoredReport; blob: Blob }> {
-  const hash = Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
-    ),
-    (b) => b.toString(16).padStart(2, "0"),
-  ).join("");
+  options.signal?.throwIfAborted();
+  const hash =
+    options.sha256 ||
+    Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest("SHA-256", await file.arrayBuffer()),
+      ),
+      (b) => b.toString(16).padStart(2, "0"),
+    ).join("");
   const id = `${source}:${hash}`;
   const base = {
     id,
@@ -773,7 +822,16 @@ export async function inspectFile(
         blob: file,
       };
     if (source === "expense") {
-      const text = await extractPdfText(await file.arrayBuffer()),
+      const text =
+          options.text ??
+          (await extractPdfText(await file.arrayBuffer(), {
+            signal: options.signal,
+            onPage: (page, total) =>
+              options.onProgress?.(
+                "reading",
+                `PDF-Seite ${page} von ${total} lesen`,
+              ),
+          })),
         expense = parseExpenseText(text, file.name);
       const expenses = expense ? [expense] : [];
       const p = expense?.date
@@ -798,7 +856,16 @@ export async function inspectFile(
       const buffer = await file.arrayBuffer(),
         signature = new TextDecoder("latin1").decode(buffer.slice(0, 5));
       if (signature !== "%PDF-") throw new Error("keine gültige PDF");
-      const text = await extractPdfText(buffer),
+      const text =
+          options.text ??
+          (await extractPdfText(buffer, {
+            signal: options.signal,
+            onPage: (page, total) =>
+              options.onProgress?.(
+                "reading",
+                `PDF-Seite ${page} von ${total} lesen`,
+              ),
+          })),
         p = inferPeriod(file.name, text);
       const hit = text.match(/Ad\s+revenue\s*\$\s*([0-9][0-9,.]*)/i),
         usd = hit ? num(hit[1]) : 0;
@@ -809,7 +876,7 @@ export async function inspectFile(
       let fxComplete = !usd;
       if (usd) {
         try {
-          const fx = await exchangeRates(["USD"], rateDate, rateDate);
+          const fx = await exchangeRates(["USD"], rateDate, rateDate, options);
           const point = rateOnOrBefore(fx.rates.USD, rateDate);
           if (!point) throw new Error("Kein USD-Kurs im Zeitraum gefunden.");
           eur = usd / point.rate;
@@ -837,7 +904,7 @@ export async function inspectFile(
         blob: file,
       };
     }
-    const text = await file.text();
+    const text = options.text ?? (await file.text());
     const p = inferPeriod(file.name, text);
     if (source === "google") {
       if (!file.name.toLowerCase().endsWith(".csv"))
@@ -1042,6 +1109,7 @@ export async function inspectFile(
             currencies,
             dates[0],
             dates[dates.length - 1],
+            options,
           );
           const used = new Set<string>();
           for (const item of foreign) {
@@ -1201,16 +1269,22 @@ export function u13Xml(
   submitter: string,
   rows: ZmRow[],
 ) {
-  const grouped=new Map<string,ZmRow>();
-  for(const row of rows){
-    const uid=row.uid.replace(/\s/g,"").toUpperCase();
-    grouped.set(uid,{...row,uid,exact:(grouped.get(uid)?.exact||0)+row.exact});
+  const grouped = new Map<string, ZmRow>();
+  for (const row of rows) {
+    const uid = row.uid.replace(/\s/g, "").toUpperCase();
+    grouped.set(uid, {
+      ...row,
+      uid,
+      exact: (grouped.get(uid)?.exact || 0) + row.exact,
+    });
   }
   const { date, time, packet } = stamp(),
     from = `${year}-${String((quarter - 1) * 3 + 1).padStart(2, "0")}`,
     to = `${year}-${String(quarter * 3).padStart(2, "0")}`;
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<ERKLAERUNGS_UEBERMITTLUNG><INFO_DATEN><ART_IDENTIFIKATIONSBEGRIFF>FASTNR</ART_IDENTIFIKATIONSBEGRIFF><IDENTIFIKATIONSBEGRIFF>${esc(submitter)}</IDENTIFIKATIONSBEGRIFF><PAKET_NR>${packet}</PAKET_NR><DATUM_ERSTELLUNG type="datum">${date}</DATUM_ERSTELLUNG><UHRZEIT_ERSTELLUNG type="uhrzeit">${time}</UHRZEIT_ERSTELLUNG><ANZAHL_ERKLAERUNGEN>1</ANZAHL_ERKLAERUNGEN></INFO_DATEN><ERKLAERUNG art="U13"><SATZNR>1</SATZNR><ALLGEMEINE_DATEN><ANBRINGEN>U13</ANBRINGEN><ZRVON type="jahrmonat">${from}</ZRVON><ZRBIS type="jahrmonat">${to}</ZRBIS><FASTNR>${esc(tax)}</FASTNR></ALLGEMEINE_DATEN>${[...grouped.values()]
-    .filter((r) => Math.trunc(r.exact)!==0)
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<ERKLAERUNGS_UEBERMITTLUNG><INFO_DATEN><ART_IDENTIFIKATIONSBEGRIFF>FASTNR</ART_IDENTIFIKATIONSBEGRIFF><IDENTIFIKATIONSBEGRIFF>${esc(submitter)}</IDENTIFIKATIONSBEGRIFF><PAKET_NR>${packet}</PAKET_NR><DATUM_ERSTELLUNG type="datum">${date}</DATUM_ERSTELLUNG><UHRZEIT_ERSTELLUNG type="uhrzeit">${time}</UHRZEIT_ERSTELLUNG><ANZAHL_ERKLAERUNGEN>1</ANZAHL_ERKLAERUNGEN></INFO_DATEN><ERKLAERUNG art="U13"><SATZNR>1</SATZNR><ALLGEMEINE_DATEN><ANBRINGEN>U13</ANBRINGEN><ZRVON type="jahrmonat">${from}</ZRVON><ZRBIS type="jahrmonat">${to}</ZRBIS><FASTNR>${esc(tax)}</FASTNR></ALLGEMEINE_DATEN>${[
+    ...grouped.values(),
+  ]
+    .filter((r) => Math.trunc(r.exact) !== 0)
     .map(
       (r) =>
         `<ZM><UID_MS>${esc(r.uid.replace(/\s/g, ""))}</UID_MS><SUM_BGL type="kz">${Math.trunc(r.exact)}</SUM_BGL><SOLEI>J</SOLEI></ZM>`,
