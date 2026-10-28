@@ -175,6 +175,11 @@ test("daily Apple summaries are recognized only as supporting data", async () =>
 });
 
 test("relay only creates allowlisted provider requests and never forwards private keys", () => {
+  for (const bucket of ["pubsite_prod_123456", "pubsite_prod_rev_123456"]) {
+    const request = prepareProviderRequest({ kind: "google_file", bucket, object: "earnings/earnings_202607.zip", token: "test-token" });
+    assert.equal(new URL(request.url).hostname, "storage.googleapis.com");
+    assert.ok(request.url.includes(bucket));
+  }
   const apple = prepareProviderRequest({
     kind: "apple_finance",
     vendor: "12345678",
