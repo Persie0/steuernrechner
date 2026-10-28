@@ -242,6 +242,34 @@ export default function CalculationWizard() {
       setExpenseJsonMessage(error instanceof Error ? error.message : "JSON konnte nicht gelesen werden.");
     }
   }
+  async function uploadExpenseZip(file: File) {
+    setBusy(true);
+    try {
+      if (file.size > 100 * 1024 * 1024) throw new Error("ZIP maximal 100 MB.");
+      const { default: JSZip } = await import("jszip");
+      const zip = await JSZip.loadAsync(await file.arrayBuffer());
+      const entries = Object.values(zip.files).filter((entry) => !entry.dir && /(?:^|\/)(?:expenses|wko|svs)\//i.test(entry.name) && /\.(?:pdf|png|jpe?g|webp)$/i.test(entry.name));
+      if (entries.length > 500) throw new Error("Maximal 500 Belege pro ZIP.");
+      let total = 0; const files: File[] = [];
+      for (const entry of entries) {
+        const bytes = await entry.async("uint8array"); total += bytes.length;
+        if (total > 100 * 1024 * 1024) throw new Error("Entpackte Belege überschreiten 100 MB.");
+        files.push(new File([bytes as BlobPart], entry.name.split("/").pop() || "Beleg", {lastModified:entry.date.getTime()}));
+      }
+      if (!files.length) throw new Error("Keine Belege in Expenses-, WKO- oder SVS-Ordnern gefunden.");
+      const results = await importFiles(files); setFeedback(results);
+      setExpenseJsonMessage(`${files.length} Belege aus der ZIP verarbeitet. Bei Bedarf im Feld Originalbeleg zuordnen auswählen.`);
+    } catch (error) { setExpenseJsonMessage(error instanceof Error ? error.message : "ZIP konnte nicht gelesen werden."); }
+    finally { setBusy(false); }
+  }
+  useEffect(() => {
+    for (const expense of expenses) {
+      if (expense.attachmentId) continue;
+      const name = expense.sourceName.split(/[\\/]/).pop()?.toLowerCase();
+      const matches = reports.filter((r) => r.name.toLowerCase() === name && r.source !== "kalkuel");
+      if (matches.length === 1) updateExpense({ ...expense, attachmentId: matches[0].id, confirmed: false });
+    }
+  }, [expenses, reports, updateExpense]);
   const [providerDebug] = useState(createProviderDebug);
   useEffect(() => {
     const clear = () => providerDebug.clear();
@@ -615,6 +643,9 @@ export default function CalculationWizard() {
           <p className="eyebrow">3 · Ausgaben</p>
           <h2>Ausgaben aus JSON importieren und prüfen</h2>
           <p>Lade die vorbereitete JSON-Datei hoch oder füge ihren Inhalt ein. Lade die Originalbelege in Schritt 2 hoch. Jeder Eintrag bleibt bis zur Prüfung unbestätigt.</p>
+          <label>ZIP mit Originalbelegen hochladen
+            <input type="file" accept=".zip,application/zip" disabled={busy} onChange={(e) => { const file = e.target.files?.[0]; if (file) void uploadExpenseZip(file); e.target.value = ""; }} />
+          </label>
           <label>Ausgaben-JSON hochladen
             <input type="file" accept="application/json,.json" onChange={(e) => { const file = e.target.files?.[0]; if (file) void file.text().then((text) => { setExpenseJson(text); loadExpenseJson(text); }); e.target.value = ""; }} />
           </label>
