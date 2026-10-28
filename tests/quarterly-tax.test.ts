@@ -184,3 +184,15 @@ test("Apple uses the last rate on the transaction day rather than financial mont
     globalThis.fetch = original;
   }
 });
+
+
+test("Apple sales without transaction dates stay blocked until their quarter is established", async () => {
+  const data = "Start Date\t07/01/2026\nEnd Date\t07/31/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n\t07/20/2026\tDE\t1\t5\t5\tEUR\tS\n";
+  const { record } = await inspectFile("apple_financial", new File([data], "FD_test_0726.txt"));
+  assert.equal((record as typeof record & { missingAppleDates?: number }).missingAppleDates, 1);
+  assert.equal(record.level, "warn");
+  assert.equal(reportContribution(record, 2026, 3).appleZm, 0);
+  assert.match(record.message, /Datum fehlt/i);
+  const result = summarizeQuarter([record], {}, emptyReview(), 2026, 3);
+  assert.ok(result.blockers.some((message) => /Apple.*Datum fehlt/i.test(message)));
+});

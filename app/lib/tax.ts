@@ -35,6 +35,7 @@ export type StoredReport = {
   contribution: Contribution;
   appleEntities?: Partial<Record<AppleEntityId, number>>;
   unresolvedAppleCountries?: string[];
+  missingAppleDates?: number;
   createdAt: string;
   parserVersion?: number;
   sha256?: string;
@@ -61,7 +62,7 @@ export const ZERO: Contribution = {
   appodealUsd: 0,
   appodealEur: 0,
 };
-export const PARSER_VERSION = 7;
+export const PARSER_VERSION = 8;
 export const GOOGLE_MOR = new Set([
   "AT",
   "BE",
@@ -1064,6 +1065,7 @@ export async function inspectFile(
       }[] = [];
       const monthly: Record<string, Contribution> = {};
       const unknown = new Set<string>();
+      let missingAppleDates = 0;
       for (const r of rs) {
         const country = (r["Country of Sale"] || "").toUpperCase();
         const entity = APPLE_ENTITY_BY_COUNTRY[country];
@@ -1078,17 +1080,21 @@ export async function inspectFile(
           continue;
         }
         const cur = (r["Partner Share Currency"] || "EUR").toUpperCase();
-        if (amount)
+        if (amount) {
+          const transactionDate = isoDate(
+            (kind === "R" ? r["Settlement Date"] : r["Transaction Date"]) || "",
+          );
+          if (!transactionDate && entity === "adi") {
+            missingAppleDates++;
+            continue;
+          }
           items.push({
             entity,
             amount,
             currency: cur,
-            date:
-              isoDate(
-                (kind === "R" ? r["Settlement Date"] : r["Transaction Date"]) ||
-                  "",
-              ) || fallbackDate,
+            date: transactionDate || fallbackDate,
           });
+        }
       }
       const entityTotals = Object.fromEntries(
         Object.keys(APPLE_ENTITIES).map((entity) => [entity, 0]),
@@ -1155,15 +1161,16 @@ export async function inspectFile(
           ...base,
           ...actualPeriod,
           rows: rs.length,
-          level: !applePeriod || missingRates || unknown.size || indicativeFx ? "warn" : "ok",
+          level: !applePeriod || missingAppleDates || missingRates || unknown.size || indicativeFx ? "warn" : "ok",
           parserVersion: PARSER_VERSION,
           appleEntities: entityTotals,
           monthly,
           indicativeFx,
+          missingAppleDates,
           periodStart: applePeriod?.start,
           periodEnd: applePeriod?.end,
           unresolvedAppleCountries: [...unknown].sort(),
-          message: `Kalenderzuordnung nach Transaktionsdatum · ${applePeriod ? `Berichtszeitraum ${applePeriod.start} bis ${applePeriod.end} · ` : "Berichtszeitraum fehlt · "}${indicativeFx ? "InforEuro nur Schätzung: bestätigte EUR-Abrechnung/Kursbeleg fehlt · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
+          message: `Kalenderzuordnung nach Transaktionsdatum · ${applePeriod ? `Berichtszeitraum ${applePeriod.start} bis ${applePeriod.end} · ` : "Berichtszeitraum fehlt · "}${missingAppleDates ? `${missingAppleDates} Apple-Irland-Zeilen: Datum fehlt, nicht in ZM-Summe enthalten · ` : ""}${indicativeFx ? "InforEuro nur Schätzung: bestätigte EUR-Abrechnung/Kursbeleg fehlt · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
           contribution: { ...ZERO, appleZm: totalEur },
         },
         blob: file,
