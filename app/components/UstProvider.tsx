@@ -162,6 +162,12 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
         const raw = localStorage.getItem(LS);
         if (raw) {
           const old = JSON.parse(raw);
+          // The owner confirmed standard store billing; apply once to existing quarters.
+          if (!localStorage.getItem("ust-standard-store-confirmed-v1")) {
+            for (const value of Object.values(old.reviews || {}))
+              if (value && typeof value === "object") (value as QuarterReview).modelConfirmed = true;
+            localStorage.setItem("ust-standard-store-confirmed-v1", "1");
+          }
           setS({
             ...initial,
             ...old,
