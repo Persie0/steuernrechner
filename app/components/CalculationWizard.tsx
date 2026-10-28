@@ -202,6 +202,7 @@ export default function CalculationWizard() {
     cancelImport,
     removeReport,
     removeAllReports,
+    deleteQuarterExpenses,
     downloadReport,
     downloadAllReports,
     review,
@@ -632,6 +633,11 @@ export default function CalculationWizard() {
               USt-Fälle zählen zunächst mit 0 € und verhindern den Abschluss.
             </p>
           )}
+          {expenses.length > 0 && <button className="secondaryBtn danger" disabled={busy} onClick={() => {
+            if (!window.confirm(`Alle ${expenses.length} Ausgaben in Q${quarter}/${year} löschen? Originaldateien und API-Zugänge bleiben erhalten.`)) return;
+            setBusy(true);
+            void deleteQuarterExpenses().catch(() => alert("Ausgaben konnten nicht vollständig gelöscht werden.")).finally(() => setBusy(false));
+          }}>Alle Ausgaben dieses Quartals löschen</button>}
           {expenses.map((e) => (
             <ExpenseEditor key={e.id} expense={e} />
           ))}

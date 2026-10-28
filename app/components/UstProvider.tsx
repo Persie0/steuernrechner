@@ -24,6 +24,8 @@ import {
 import {
   emptyReview,
   summarizeQuarter,
+  quarterDates,
+  mergeExpenses,
   type QuarterReview,
 } from "../lib/quarterly";
 
@@ -59,6 +61,7 @@ type Ctx = Store & {
   setReview: (patch: Partial<QuarterReview>) => void;
   expenses: ExpenseDraft[];
   updateExpense: (expense: ExpenseDraft) => void;
+  deleteQuarterExpenses: () => Promise<void>;
   filingBlockers: string[];
   setYear: (n: number) => void;
   setQuarter: (n: number) => void;
@@ -626,6 +629,19 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       };
     });
   }
+  async function deleteQuarterExpenses() {
+    await migrationPromise.current;
+    await importQueue.current;
+    const { from, to } = quarterDates(s.year, s.quarter);
+    const ids = new Set(mergeExpenses(s.reports, s.expenseOverrides).filter((e) => e.date >= from && e.date <= to).map((e) => e.id));
+    const changed = s.reports.filter((r) => r.expenses?.some((e) => ids.has(e.id)));
+    for (const report of changed) {
+      const stored = await getFile(report.id);
+      if (!stored?.blob) throw new Error("Originaldatei fehlt.");
+      await putFile({ ...report, expenses: report.expenses?.filter((e) => !ids.has(e.id)) }, stored.blob);
+    }
+    setS((c) => ({ ...c, reports: c.reports.map((r) => ({ ...r, expenses: r.expenses?.filter((e) => !ids.has(e.id)) })), expenseOverrides: Object.fromEntries(Object.entries(c.expenseOverrides).filter(([id]) => !ids.has(id))), reviews: { ...c.reviews, [key]: { ...(c.reviews[key] || emptyReview()), expenses: "", expensesComplete: false, reviewed: false } } }));
+  }
   async function downloadReport(id: string) {
     const item = await getFile(id);
     if (!item?.blob) return;
@@ -740,6 +756,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
         importFiles,
         removeReport,
         removeAllReports,
+        deleteQuarterExpenses,
         downloadReport,
         downloadAllReports,
         reset,
