@@ -12,6 +12,7 @@ import {
   downloadAppleReports,
   downloadGoogleReports,
   downloadAppodealReport,
+  configuredProviders,
 } from "../app/lib/provider-import.ts";
 import { prepareProviderRequest } from "../app/lib/provider-relay.ts";
 import { POST } from "../app/api/provider-reports/route.ts";
@@ -19,13 +20,27 @@ import { detectSource } from "../app/lib/quarterly.ts";
 import { inspectFile, reportContribution } from "../app/lib/tax.ts";
 import { gzipSync } from "node:zlib";
 import JSZip from "jszip";
-import { expandImportFiles } from "../app/lib/importer.ts";
+import { expandImportFiles, importDocumentBatch } from "../app/lib/importer.ts";
+import { createProviderDebug } from "../app/lib/provider-debug.ts";
 
 const b64 = (value: Uint8Array) => Buffer.from(value).toString("base64");
 const pem = (value: Uint8Array) =>
   `-----BEGIN PRIVATE KEY-----\n${b64(value)}\n-----END PRIVATE KEY-----`;
 const decode = (value: string) =>
   JSON.parse(Buffer.from(value, "base64url").toString());
+
+test("automatic refresh selects only complete saved provider credentials", () => {
+  assert.deepEqual(configuredProviders({
+    apple: { issuerId: "issuer", keyId: "key", vendor: "12345678", privateKey: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----" },
+    google: { bucket: "pubsite_prod_rev_123456", serviceAccountJson: "{invalid" },
+    appodeal: { userId: "123", apiKey: "token" },
+  }), ["apple", "appodeal"]);
+  assert.deepEqual(configuredProviders({
+    apple: { issuerId: "", keyId: "", vendor: "", privateKey: "" },
+    google: { bucket: "pubsite_prod_rev_123456", serviceAccountJson: JSON.stringify({ client_email: "test@example.test", private_key: "private" }) },
+    appodeal: { userId: "", apiKey: "" },
+  }), ["google"]);
+});
 
 test("Apple JWT is signed in the browser with a short expiry", async () => {
   const key = await crypto.subtle.generateKey(
@@ -100,13 +115,16 @@ test("Google JWT uses the read-only storage scope", async () => {
   );
 });
 
-test("financial report selection includes both neighbouring months and handles year boundaries", () => {
+test("financial report search covers Apple API offsets across year boundaries", () => {
   assert.deepEqual(appleReportMonths(2026, 4), [
     "2026-09",
     "2026-10",
     "2026-11",
     "2026-12",
     "2027-01",
+    "2027-02",
+    "2027-03",
+    "2027-04",
   ]);
   assert.deepEqual(appleReportMonths(2026, 1), [
     "2025-12",
@@ -114,7 +132,19 @@ test("financial report selection includes both neighbouring months and handles y
     "2026-02",
     "2026-03",
     "2026-04",
+    "2026-05",
+    "2026-06",
+    "2026-07",
   ]);
+});
+
+test("financial parser uses the report period even when the requested API month was different", async () => {
+  const data = "Start Date\t03/29/2026\nEnd Date\t05/02/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n04/15/2026\t04/15/2026\tDE\t1\t5\t5\tEUR\tS\n";
+  const { record } = await inspectFile("apple_financial", new File([data], "FD_test_0726.txt"));
+  assert.equal(record.year, 2026);
+  assert.equal(record.month, 4);
+  assert.equal(record.periodStart, "2026-03-29");
+  assert.equal(reportContribution(record, 2026, 2).appleZm, 5);
 });
 
 test("Google selects the three official earnings object paths for the quarter", () => {
@@ -221,7 +251,7 @@ test("relay rejects foreign origins and never returns provider errors containing
   }
 });
 
-test("Apple download imports available reports and keeps missing months explicit", async () => {
+test("Apple download identifies fiscal coverage from report content despite a three-month API offset", async () => {
   const key = await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
@@ -237,6 +267,8 @@ test("Apple download imports available reports and keeps missing months explicit
     bodies.push(body);
     const request = JSON.parse(body);
     if (request.kind === "apple_finance" && request.date === "2026-07")
+      return new Response(gzipSync(Buffer.from("Start Date\t03/29/2026\nEnd Date\t05/02/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n04/15/2026\t04/15/2026\tDE\t1\t9\t9\tEUR\tS\n")));
+    if (request.kind === "apple_finance" && request.date === "2026-10")
       return new Response(
         gzipSync(
           Buffer.from(
@@ -244,6 +276,10 @@ test("Apple download imports available reports and keeps missing months explicit
           ),
         ),
       );
+    if (request.kind === "apple_finance" && request.date === "2026-11")
+      return new Response(gzipSync(Buffer.from("Start Date\t08/02/2026\nEnd Date\t08/29/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n08/03/2026\t08/03/2026\tDE\t1\t4\t4\tEUR\tS\n")));
+    if (request.kind === "apple_finance" && request.date === "2026-12")
+      return new Response(gzipSync(Buffer.from("Start Date\t08/30/2026\nEnd Date\t09/26/2026\nTransaction Date\tSettlement Date\tCountry of Sale\tQuantity\tPartner Share\tExtended Partner Share\tPartner Share Currency\tSale or Return\n09/03/2026\t09/03/2026\tDE\t1\t5\t5\tEUR\tS\n")));
     if (request.kind === "apple_sales" && request.date === "2026-09-30")
       return new Response(
         gzipSync(
@@ -255,17 +291,28 @@ test("Apple download imports available reports and keeps missing months explicit
     return Response.json({ error: "nicht verfügbar" }, { status: 404 });
   };
   try {
+    const debug = createProviderDebug();
     const result = await downloadAppleReports(
       { issuerId: "issuer", keyId: "KEY", vendor: "12345678", privateKey },
       2026,
       3,
+      { debug },
     );
     assert.deepEqual(
       result.files.map((file) => file.name),
-      ["FD_12345678_0726.txt", "S_D_12345678_20260930.txt"],
+      ["FD_12345678_20260628_20260801.txt", "FD_12345678_20260802_20260829.txt", "FD_12345678_20260830_20260926.txt", "S_D_12345678_20260930.txt"],
     );
-    assert.equal(result.warnings.length, 10);
-    assert.equal(bodies.length, 12);
+    assert.ok(result.warnings.some((warning) => warning.includes("2026-09-27")));
+    assert.equal(bodies.length, 15);
+    assert.equal(debug.files.length, 5); // includes the out-of-quarter raw response
+    assert.ok(debug.events.some((event) => event.zeitraum === "2026-07" && /2026-03-29/.test(event.hinweis || "")));
+    assert.doesNotMatch(JSON.stringify(debug.events), /PRIVATE KEY|secret-token/);
+    const records = await Promise.all(result.files.slice(0, 3).map(async (file) => (await inspectFile("apple_financial", file)).record));
+    assert.equal(records.reduce((sum, record) => sum + reportContribution(record, 2026, 3).appleZm, 0), 12);
+    const earlier = await importDocumentBatch([new File([await result.files[0].arrayBuffer()], "FD_test_1026.txt")], { existingHashes: new Set(), save: async () => {} });
+    const repeated = await importDocumentBatch([result.files[0]], { existingHashes: new Set([earlier.records[0].sha256!]), existingReports: earlier.records, save: async () => { throw new Error("Duplicate saved"); } });
+    assert.equal(repeated.records.length, 0);
+    assert.match(repeated.feedback[0].message, /identischer Inhalt bereits vorhanden/);
     assert.ok(
       bodies.every(
         (body) => !body.includes("PRIVATE KEY") && !body.includes(privateKey),
@@ -329,7 +376,7 @@ test("Apple download crosses the real relay and forwards no private key", async 
       3,
     );
     assert.equal(result.files.length, 1);
-    assert.equal(upstreamCalls, 12);
+    assert.equal(upstreamCalls, 15);
     const inspected = await inspectFile("apple_financial", result.files[0]);
     assert.equal(reportContribution(inspected.record, 2026, 3).appleZm, 3);
   } finally {

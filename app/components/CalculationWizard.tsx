@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatBytes, useUst, type UploadFeedback } from "./UstProvider";
 import { money, vatBalance, type ExpenseDraft } from "../lib/tax";
 import { quarterDates } from "../lib/quarterly";
@@ -11,6 +11,7 @@ import {
 } from "../lib/quarter-hints";
 import ImportProgressPanel, { importIsActive } from "./ImportProgressPanel";
 import ProviderImportPanel from "./ProviderImportPanel";
+import { createProviderDebug } from "../lib/provider-debug";
 
 const monthNames = [
   "Jänner",
@@ -212,6 +213,12 @@ export default function CalculationWizard() {
     [feedback, setFeedback] = useState<UploadFeedback[]>([]),
     [showFiles, setShowFiles] = useState(false),
     [showCorrection, setShowCorrection] = useState(false);
+  const [providerDebug] = useState(createProviderDebug);
+  useEffect(() => {
+    const clear = () => providerDebug.clear();
+    window.addEventListener("provider-credentials-cleared", clear);
+    return () => window.removeEventListener("provider-credentials-cleared", clear);
+  }, [providerDebug]);
   const { from, to } = quarterDates(year, quarter),
     months = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3];
   const balance = vatBalance(values),
@@ -431,6 +438,7 @@ export default function CalculationWizard() {
             cancelImport={cancelImport}
             onBusyChange={setApiBusy}
             onImportFeedback={setFeedback}
+            debug={providerDebug}
           />
           {reports.length > 0 && (
             <section

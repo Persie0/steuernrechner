@@ -1,5 +1,6 @@
 import { fetchWithTimeout } from "./network.ts";
 import { decodeReportText } from "./provider-import.ts";
+import { appleFinancialPeriod, applePeriodMonth } from "./apple-period.ts";
 
 export type Source =
   | "google"
@@ -60,7 +61,7 @@ export const ZERO: Contribution = {
   appodealUsd: 0,
   appodealEur: 0,
 };
-export const PARSER_VERSION = 6;
+export const PARSER_VERSION = 7;
 export const GOOGLE_MOR = new Set([
   "AT",
   "BE",
@@ -1049,9 +1050,11 @@ export async function inspectFile(
         "Partner Share Currency",
       ])
         if (!(h in rs[0])) throw new Error(`Pflichtspalte ${h} fehlt`);
+      const applePeriod = appleFinancialPeriod(text);
+      const actualPeriod = applePeriod ? applePeriodMonth(applePeriod) : p;
       const fallbackDate =
-        p.year && p.month
-          ? isoMonthEnd(p.year, p.month)
+        actualPeriod.year && actualPeriod.month
+          ? isoMonthEnd(actualPeriod.year, actualPeriod.month)
           : new Date().toISOString().slice(0, 10);
       const items: {
         entity: AppleEntityId;
@@ -1150,19 +1153,17 @@ export async function inspectFile(
       return {
         record: {
           ...base,
-          ...p,
+          ...actualPeriod,
           rows: rs.length,
-          level: missingRates || unknown.size || indicativeFx ? "warn" : "ok",
+          level: !applePeriod || missingRates || unknown.size || indicativeFx ? "warn" : "ok",
           parserVersion: PARSER_VERSION,
           appleEntities: entityTotals,
           monthly,
           indicativeFx,
-          periodStart: isoDate(
-            text.match(/^Start Date\t([^\r\n]+)/m)?.[1] || "",
-          ),
-          periodEnd: isoDate(text.match(/^End Date\t([^\r\n]+)/m)?.[1] || ""),
+          periodStart: applePeriod?.start,
+          periodEnd: applePeriod?.end,
           unresolvedAppleCountries: [...unknown].sort(),
-          message: `Kalenderzuordnung nach Transaktionsdatum · ${indicativeFx ? "InforEuro nur Schätzung: bestätigte EUR-Abrechnung/Kursbeleg fehlt · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
+          message: `Kalenderzuordnung nach Transaktionsdatum · ${applePeriod ? `Berichtszeitraum ${applePeriod.start} bis ${applePeriod.end} · ` : "Berichtszeitraum fehlt · "}${indicativeFx ? "InforEuro nur Schätzung: bestätigte EUR-Abrechnung/Kursbeleg fehlt · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
           contribution: { ...ZERO, appleZm: totalEur },
         },
         blob: file,

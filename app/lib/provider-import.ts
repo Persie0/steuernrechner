@@ -4,6 +4,30 @@ import {
   type AppleCredentials,
   type GoogleServiceAccount,
 } from "./provider-auth.ts";
+import { appleFinancialPeriod, firstUncoveredDate, type ApplePeriod } from "./apple-period.ts";
+import type { ProviderDebug } from "./provider-debug.ts";
+
+export type ProviderName = "apple" | "google" | "appodeal";
+export type ProviderCredentials = {
+  apple: AppleCredentials;
+  google: { bucket: string; serviceAccountJson: string };
+  appodeal: { apiKey: string; userId: string };
+};
+
+export function configuredProviders(credentials: ProviderCredentials): ProviderName[] {
+  const result: ProviderName[] = [];
+  const apple = credentials.apple;
+  if (apple.issuerId && apple.keyId && /^\d{4,32}$/.test(apple.vendor) && apple.privateKey.includes("BEGIN PRIVATE KEY"))
+    result.push("apple");
+  try {
+    const google = JSON.parse(credentials.google.serviceAccountJson);
+    if (credentials.google.bucket && typeof google.client_email === "string" && google.client_email && typeof google.private_key === "string" && google.private_key)
+      result.push("google");
+  } catch {}
+  if (credentials.appodeal.apiKey && /^\d{1,32}$/.test(credentials.appodeal.userId))
+    result.push("appodeal");
+  return result;
+}
 
 export function appleReportMonths(year: number, quarter: number) {
   if (
@@ -13,7 +37,7 @@ export function appleReportMonths(year: number, quarter: number) {
     ![1, 2, 3, 4].includes(quarter)
   )
     throw new Error("Ungültiges Quartal.");
-  return Array.from({ length: 5 }, (_, i) => {
+  return Array.from({ length: 8 }, (_, i) => {
     const date = new Date(Date.UTC(year, (quarter - 1) * 3 - 1 + i, 1));
     return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
   });
@@ -82,6 +106,7 @@ export async function gunzipReport(input: Uint8Array) {
 }
 export type ProviderProgress = (message: string) => void;
 export type ProviderDownload = { files: File[]; warnings: string[] };
+type ProviderOptions = { signal?: AbortSignal; progress?: ProviderProgress; debug?: ProviderDebug; onDebug?: () => void };
 
 class ProviderError extends Error {
   readonly status: number;
@@ -90,14 +115,35 @@ class ProviderError extends Error {
     this.status = status;
   }
 }
-async function relay(payload: Record<string, unknown>, signal?: AbortSignal) {
-  const response = await fetch("/api/provider-reports", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-    cache: "no-store",
-  });
+async function relay(payload: Record<string, unknown>, options: ProviderOptions) {
+  const started = Date.now();
+  let response: Response;
+  try {
+    response = await fetch("/api/provider-reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: options.signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    if (!options.signal?.aborted) {
+      options.debug?.capture(payload, undefined, undefined, Date.now() - started, "Netzwerkfehler.");
+      options.onDebug?.();
+    }
+    throw error;
+  }
+  if (options.debug && !options.signal?.aborted) {
+    let raw: Uint8Array | undefined, note: string | undefined;
+    if (response.ok && ["apple_finance", "apple_sales", "google_file", "appodeal_result"].includes(String(payload.kind))) {
+      try { raw = new Uint8Array(await response.clone().arrayBuffer()); }
+      catch { note = "Rohantwort konnte für das Debug-ZIP nicht gelesen werden."; }
+    }
+    if (!options.signal?.aborted) {
+      options.debug.capture(payload, response.status, raw, Date.now() - started, note);
+      options.onDebug?.();
+    }
+  }
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
     throw new ProviderError(
@@ -118,11 +164,14 @@ export async function downloadAppleReports(
   config: AppleCredentials,
   year: number,
   quarter: number,
-  options: { signal?: AbortSignal; progress?: ProviderProgress } = {},
+  options: ProviderOptions = {},
 ): Promise<ProviderDownload> {
   const token = await createAppleToken(config);
   const files: File[] = [],
     warnings: string[] = [];
+  const periods: ApplePeriod[] = [];
+  const from = `${year}-${String(quarter * 3 - 2).padStart(2, "0")}-01`;
+  const to = new Date(Date.UTC(year, quarter * 3, 0)).toISOString().slice(0, 10);
   const months = appleReportMonths(year, quarter);
   for (const month of months) {
     options.signal?.throwIfAborted();
@@ -130,7 +179,7 @@ export async function downloadAppleReports(
     try {
       const response = await relay(
         { kind: "apple_finance", vendor: config.vendor, date: month, token },
-        options.signal,
+        options,
       );
       const bytes = await gunzipReport(
         new Uint8Array(await response.arrayBuffer()),
@@ -138,10 +187,21 @@ export async function downloadAppleReports(
       const text = decodeReportText(bytes);
       if (!/^Transaction Date\tSettlement Date\t/im.test(text))
         throw new Error("Kein Financial-Detailed-Bericht zurückgegeben.");
+      const period = appleFinancialPeriod(text);
+      if (!period) throw new Error("Berichtszeitraum fehlt oder ist ungültig.");
+      const overlaps = period.end >= from && period.start <= to;
+      options.debug?.applePeriod(month, period.start, period.end, overlaps);
+      options.onDebug?.();
+      if (!overlaps) continue;
+      if (periods.some((other) => other.start === period.start && other.end === period.end)) {
+        warnings.push(`Apple: Mehrere Antworten für ${period.start} bis ${period.end}; Zeitraum prüfen.`);
+        continue;
+      }
+      periods.push(period);
       files.push(
         new File(
           [bytes as BlobPart],
-          `FD_${config.vendor}_${month.slice(5)}${month.slice(2, 4)}.txt`,
+          `FD_${config.vendor}_${period.start.replace(/-/g, "")}_${period.end.replace(/-/g, "")}.txt`,
           { type: "text/plain" },
         ),
       );
@@ -152,9 +212,13 @@ export async function downloadAppleReports(
         warnings.push(`Apple ${month}: ${reportError(error)}`);
         return { files, warnings };
       }
-      warnings.push(`Apple ${month}: ${reportError(error)}`);
+      if (!(error instanceof ProviderError && error.status === 404))
+        warnings.push(`Apple API-Monat ${month}: ${reportError(error)}`);
     }
   }
+  const uncovered = firstUncoveredDate(periods, from, to);
+  if (uncovered)
+    warnings.push(`Apple: Ab ${uncovered} ist das Quartal durch die abgerufenen Financial-Berichte nicht lückenlos abgedeckt. Bereits lokal gespeicherte Berichte werden bei der Quartalsprüfung berücksichtigt.`);
   // Daily summaries are supporting evidence only; the existing parser does not add them to ZM.
   const end = new Date(Date.UTC(year, quarter * 3, 0));
   for (let day = 6; day >= 0; day--) {
@@ -166,7 +230,7 @@ export async function downloadAppleReports(
     try {
       const response = await relay(
         { kind: "apple_sales", vendor: config.vendor, date: dayText, token },
-        options.signal,
+        options,
       );
       const bytes = await gunzipReport(
         new Uint8Array(await response.arrayBuffer()),
@@ -198,13 +262,13 @@ export async function downloadGoogleReports(
   config: { bucket: string; serviceAccount: GoogleServiceAccount },
   year: number,
   quarter: number,
-  options: { signal?: AbortSignal; progress?: ProviderProgress } = {},
+  options: ProviderOptions = {},
 ): Promise<ProviderDownload> {
   options.progress?.("Google-Anmeldung vorbereiten …");
   const assertion = await createGoogleAssertion(config.serviceAccount);
   const tokenResponse = await relay(
     { kind: "google_token", assertion },
-    options.signal,
+    options,
   );
   const auth = await tokenResponse.json();
   if (typeof auth.access_token !== "string")
@@ -219,7 +283,7 @@ export async function downloadGoogleReports(
     try {
       const response = await relay(
         { kind: "google_file", bucket: config.bucket, object, token },
-        options.signal,
+        options,
       );
       const bytes = new Uint8Array(await response.arrayBuffer());
       const name = object.split("/").pop() || "earnings.zip";
@@ -262,7 +326,7 @@ export async function downloadAppodealReport(
   config: { apiKey: string; userId: string },
   year: number,
   quarter: number,
-  options: { signal?: AbortSignal; progress?: ProviderProgress } = {},
+  options: ProviderOptions = {},
 ): Promise<ProviderDownload> {
   const from = `${year}-${String(quarter * 3 - 2).padStart(2, "0")}-01`;
   const to = new Date(Date.UTC(year, quarter * 3, 0))
@@ -271,7 +335,7 @@ export async function downloadAppodealReport(
   const auth = { apiKey: config.apiKey, userId: config.userId };
   options.progress?.("Appodeal-Statistik anfordern …");
   const start = await (
-    await relay({ kind: "appodeal_start", ...auth, from, to }, options.signal)
+    await relay({ kind: "appodeal_start", ...auth, from, to }, options)
   ).json();
   const taskId = start.task_id ?? start.data?.task_id;
   if (typeof taskId !== "string" && typeof taskId !== "number")
@@ -285,13 +349,13 @@ export async function downloadAppodealReport(
     );
     const statusResponse = await relay(
       { kind: "appodeal_status", ...auth, taskId: String(taskId) },
-      options.signal,
+      options,
     );
     await statusResponse.arrayBuffer();
     const result = await (
       await relay(
         { kind: "appodeal_result", ...auth, taskId: String(taskId) },
-        options.signal,
+        options,
       )
     ).json();
     if (Number(result.code) === 0 && Array.isArray(result.data)) {
