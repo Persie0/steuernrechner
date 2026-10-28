@@ -6,7 +6,11 @@ import { StoredNotice, useUst } from "./UstProvider";
 import { useBooks } from "./BookkeepingProvider";
 
 const workflow = [
-  { href: "/", label: "Quartalsdurchlauf" },
+  { href: "/", label: "Übersicht" },
+  { href: "/berechnung", label: "Quartalsdurchlauf" },
+  { href: "/ausgaben", label: "Alle Ausgaben" },
+  { href: "/dateien", label: "Alle Dateien" },
+  { href: "/appodeal", label: "Appodeal" },
   { href: "/finanzonline", label: "UVA/ZM · Abgabe" },
   { href: "/breakdown", label: "Berechnungsdetails" },
   { href: "/einstellungen", label: "Einstellungen & Backup" },
@@ -30,8 +34,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const navLink = (item: { href: string; label: string }) => (
     <Link
       className={
-        path === item.href ||
-        (item.href === "/berechnung" && path === "/dateien")
+        path === item.href
           ? "active"
           : ""
       }

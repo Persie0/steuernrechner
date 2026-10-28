@@ -26,6 +26,7 @@ import {
   summarizeQuarter,
   quarterDates,
   mergeExpenses,
+  expenseAffectedPeriods,
   type QuarterReview,
 } from "../lib/quarterly";
 
@@ -216,12 +217,14 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     const stale = s.reports.filter(
       (r) =>
         r.parserVersion !== PARSER_VERSION ||
+        ((r.source === "google" || r.source === "apple_financial") && r.level !== "error" && !r.income) ||
         (r.source === "attachment" && /^S_D_.*\.(txt|csv)$/i.test(r.name)),
     );
     if (!stale.length) return;
     migrationStarted.current = true;
     migrationPromise.current = (async () => {
       const updates = new Map<string, StoredReport>();
+      let taxValuesReparsed = false;
       for (const report of stale) {
         if (migrationController.current.signal.aborted) break;
         try {
@@ -241,11 +244,11 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           );
           if (migrationController.current.signal.aborted) break;
           if (dailyAttachment && parsed.record.level === "error") continue;
-          const updated = {
-            ...parsed.record,
-            id: report.id,
-            createdAt: report.createdAt,
-          };
+          const incomeOnly = report.parserVersion === PARSER_VERSION && !dailyAttachment;
+          const updated = incomeOnly
+            ? { ...report, income: parsed.record.income || [], incomeWarnings: parsed.record.level === "error" ? [parsed.record.message] : parsed.record.incomeWarnings }
+            : { ...parsed.record, id: report.id, createdAt: report.createdAt };
+          if (!incomeOnly) taxValuesReparsed = true;
           await putFile(updated, stored.blob);
           updates.set(report.id, updated);
         } catch {}
@@ -257,7 +260,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       setS((c) => ({
         ...c,
         reports: [...c.reports.map((r) => updates.get(r.id) || r), ...saved.proofs.filter((p) => !c.reports.some((r) => r.id === p.id))],
-        reviews: updates.size
+        reviews: taxValuesReparsed
           ? Object.fromEntries(Object.entries(c.reviews).map(([period, value]) => [period, { ...value, reviewed: false }]))
           : c.reviews,
       }));
@@ -579,6 +582,8 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     return enqueueImport(Array.from(list || []));
   }
   async function removeReport(id: string) {
+    // Avoid restoring an original that is still being read for migration.
+    await migrationPromise.current;
     await deleteFile(id);
     setS((c) => ({
       ...c,
@@ -688,6 +693,8 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     )
       return false;
     importController.current?.abort();
+    migrationController.current.abort();
+    await migrationPromise.current;
     await importQueue.current;
     await clearDb();
     localStorage.removeItem(LS);
@@ -743,14 +750,13 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
             };
           }),
         updateExpense: (expense) =>
-          setS((c) => ({
-            ...c,
-            expenseOverrides: { ...c.expenseOverrides, [expense.id]: expense },
-            reviews: {
-              ...c.reviews,
-              [key]: { ...(c.reviews[key] || emptyReview()), reviewed: false },
-            },
-          })),
+          setS((c) => {
+            const previous = mergeExpenses(c.reports, c.expenseOverrides).find((item) => item.id === expense.id);
+            const reviews = { ...c.reviews };
+            for (const period of new Set([key, ...expenseAffectedPeriods(previous, expense)]))
+              reviews[period] = { ...(reviews[period] || emptyReview()), reviewed: false };
+            return { ...c, expenseOverrides: { ...c.expenseOverrides, [expense.id]: expense }, reviews };
+          }),
         addFiles: (source, files) =>
           enqueueImport(Array.from(files || []), source),
         importFiles,

@@ -31,6 +31,7 @@ export default function ProviderImportPanel({
   onBusyChange,
   onImportFeedback,
   debug,
+  scope = "stores",
 }: {
   year: number;
   quarter: number;
@@ -40,6 +41,7 @@ export default function ProviderImportPanel({
   onBusyChange: (busy: boolean) => void;
   onImportFeedback: (feedback: UploadFeedback[]) => void;
   debug: ProviderDebug;
+  scope?: "stores" | "appodeal";
 }) {
   const [credentials, setCredentials] = useState<Credentials>(empty);
   const [running, setRunning] = useState<Provider | "all" | null>(null);
@@ -240,8 +242,9 @@ export default function ProviderImportPanel({
   return (
     <section
       className="providerPanel"
-      aria-label="Automatischer Plattformabruf"
+      aria-label={scope === "stores" ? "Apple und Google abrufen" : "Appodeal abrufen"}
     >
+      {scope === "stores" && <>
       <h3>Apple und Google abrufen</h3>
       <button type="button" className="uploadBtn" disabled={locked} onClick={() => {
         const selected = configuredProviders(credentials).filter((provider) => provider === "apple" || provider === "google");
@@ -251,9 +254,8 @@ export default function ProviderImportPanel({
       <p>Der Abruf startet nur, wenn du auf einen Abrufknopf klickst. Gespeicherte Zugänge bleiben in diesem Browser und können für das gewählte Quartal verwendet werden.</p>
       <p className="hint">
         Gespeicherte Zugangsdaten liegen nur in diesem Browser. Beim Abruf
-        werden die Berichte über Vercel durchgeleitet: Apple und Google nutzen
-        dafür kurzlebige Tokens; Appodeal überträgt seinen API-Schlüssel bei
-        jeder Anfrage. Auf dem Server werden sie nicht gespeichert. Wer Zugriff
+        werden die Berichte über Vercel durchgeleitet; Apple und Google nutzen
+        dafür kurzlebige Tokens. Auf dem Server werden sie nicht gespeichert. Wer Zugriff
         auf diesen Browser hat, kann die gespeicherten Zugangsdaten auslesen.
       </p>
       <details>
@@ -390,7 +392,8 @@ export default function ProviderImportPanel({
         </div>
         {actions("google")}
       </details>
-      <details>
+      </>}
+      {scope === "appodeal" && <details open>
         <summary>Appodeal Reporting</summary>
         <p>
           API Key und User ID stehen in deinem{" "}
@@ -434,7 +437,7 @@ export default function ProviderImportPanel({
           </label>
         </div>
         {actions("appodeal")}
-      </details>
+      </details>}
       {!!message && (
         <p role="status" aria-live="polite">
           {message}
