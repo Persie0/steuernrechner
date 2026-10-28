@@ -413,6 +413,18 @@ export type ExpenseDraft = {
   excluded?: boolean;
   note: string;
 };
+export function withPaymentDateMatchingTaxDate(expense: ExpenseDraft, matches: boolean): ExpenseDraft {
+  return { ...expense, paymentDate: matches ? expense.date : "", confirmed: false };
+}
+export function withExpenseTaxDate(expense: ExpenseDraft, date: string): ExpenseDraft {
+  const paymentMatches = !!expense.date && expense.paymentDate === expense.date;
+  return { ...expense, date, paymentDate: paymentMatches ? date : expense.paymentDate, confirmed: false };
+}
+export function openAiExpensesWithMissingPaymentDate(expenses: ExpenseDraft[]): ExpenseDraft[] {
+  return expenses
+    .filter((expense) => /openai/i.test(expense.title) && !expense.excluded && !!expense.date && !expense.paymentDate)
+    .map((expense) => withPaymentDateMatchingTaxDate(expense, true));
+}
 export function expenseKey(title: string, date: string, net: number) {
   const supplier = /openai/i.test(title)
     ? "openai"
