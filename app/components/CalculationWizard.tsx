@@ -527,8 +527,7 @@ export default function CalculationWizard() {
               bis {to} nötig.
             </p>
             <p>
-              <b>Wechselkurse:</b> „InforEuro nur Schätzung“ ist kein
-              Lesefehler. Für diese Währungen einen zulässigen Kursbeleg prüfen
+              <b>Wechselkurse:</b> EZB-Kurse werden bevorzugt; falls nicht verfügbar, werden Tageskurse der Banca d’Italia verwendet. Für diese Währungen einen zulässigen Kursbeleg prüfen
               oder in Schritt 4 eine auf das Kalenderquartal abgestimmte
               EUR-Summe mit Belegreferenz ergänzen. Eine Bankauszahlung allein
               belegt die ZM-Quartalssumme nicht.
@@ -697,8 +696,7 @@ export default function CalculationWizard() {
               <p>
                 Nur Apple Distribution International (Irland) kommt in die ZM.
                 Andere Apple-Gesellschaften bleiben getrennt. EZB-Umrechnung
-                erfolgt zum Transaktionsdatum; InforEuro-Ersatzkurse sind
-                lediglich Schätzwerte und geben den Export nicht frei.
+                erfolgt zum Transaktionsdatum; Banca-d’Italia-Kurse werden als Tageskurse angezeigt und müssen für die steuerliche Anwendung geprüft werden.
               </p>
               <div className="expenseFields">
                 <label>
