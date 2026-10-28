@@ -181,7 +181,7 @@ export function summarizeQuarter(
       )
     )
       blockers.push(
-        "Apple: ungeklärte Währungen/Entities. Bestätigte EUR-Gesamtsumme mit Belegreferenz ergänzen; InforEuro ist nur eine Schätzung.",
+        "Apple: ungeklärte Währungen/Entities. Banca-d’Italia-Kurse und ihre steuerliche Anwendung prüfen; bestätigte EUR-Gesamtsumme mit Belegreferenz ergänzen.",
       );
   }
   if (review.expenses === "")

@@ -5,8 +5,7 @@ type RatePoint = { date: string; rate: number };
 const ECB_HISTORY_URL =
   "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.csv";
 const ECB_DATA_URL = "https://data-api.ecb.europa.eu/service/data/EXR";
-const INFOEURO_URL =
-  "https://ec.europa.eu/budg/inforeuro/api/public/monthly-rates";
+const BANCA_URL = "https://tassidicambio.bancaditalia.it/terzevalute-wf-web/rest/v1.0/dailyTimeSeries";
 const ECB_HEADERS = {
   Accept: "text/csv,application/csv;q=0.9,*/*;q=0.1",
   "User-Agent":
@@ -152,83 +151,22 @@ async function fetchHistory(currencies: string[], from: string, to: string) {
   return rates;
 }
 
-type InforEuroRow = Record<string, unknown>;
-
-function inforEuroRows(payload: unknown): InforEuroRow[] {
-  if (Array.isArray(payload)) return payload as InforEuroRow[];
-  if (!payload || typeof payload !== "object") return [];
-  for (const key of ["content", "rates", "data", "results"]) {
-    const value = (payload as Record<string, unknown>)[key];
-    if (Array.isArray(value)) return value as InforEuroRow[];
-  }
-  return [];
-}
-
-function readString(row: InforEuroRow, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function readNumber(row: InforEuroRow, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    const number =
-      typeof value === "number"
-        ? value
-        : typeof value === "string"
-          ? Number(value.replace(",", "."))
-          : Number.NaN;
-    if (Number.isFinite(number) && number > 0) return number;
-  }
-  return Number.NaN;
-}
-
-async function fetchInforEuroMonth(year: number, month: number) {
-  const url = new URL(INFOEURO_URL);
-  url.searchParams.set("year", String(year));
-  url.searchParams.set("month", String(month));
-  const response = await fetchWithTimeout(
-    url,
-    { headers: ECB_HEADERS, next: { revalidate: 86400 } },
-    8_000,
-  );
-  if (!response.ok) {
-    throw new Error(`InforEuro antwortete mit ${response.status}`);
-  }
-  const rows = inforEuroRows(await response.json());
-  const date = `${year}-${String(month).padStart(2, "0")}-01`;
-  const rates: Record<string, RatePoint> = {};
-  for (const row of rows) {
-    const currency = readString(row, [
-      "isoCode",
-      "isoA3Code",
-      "currencyIsoCode",
-      "currencyCode",
-      "currency",
-    ]).toUpperCase();
-    const rate = readNumber(row, ["value", "rate", "exchangeRate", "amount"]);
-    if (/^[A-Z]{3}$/.test(currency) && Number.isFinite(rate)) {
-      rates[currency] = { date, rate };
-    }
-  }
-  return rates;
-}
-
-function monthsBetween(from: string, to: string) {
-  const start = new Date(`${from.slice(0, 7)}-01T00:00:00Z`);
-  const end = new Date(`${to.slice(0, 7)}-01T00:00:00Z`);
-  const months: { year: number; month: number }[] = [];
-  while (start <= end) {
-    months.push({
-      year: start.getUTCFullYear(),
-      month: start.getUTCMonth() + 1,
-    });
-    start.setUTCMonth(start.getUTCMonth() + 1);
-  }
-  return months;
+async function fetchBanca(currency: string, from: string, to: string) {
+  const url = new URL(BANCA_URL);
+  url.searchParams.set("startDate", subtractDays(from, 10));
+  url.searchParams.set("endDate", to);
+  url.searchParams.set("baseCurrencyIsoCode", currency);
+  url.searchParams.set("currencyIsoCode", "EUR");
+  url.searchParams.set("lang", "en");
+  const response = await fetchWithTimeout(url, { headers: { Accept: "application/json" }, next: { revalidate: 86400 } }, 8000);
+  if (!response.ok) throw new Error("Banca d’Italia nicht erreichbar.");
+  const payload = await response.json();
+  if (payload?.resultsInfo?.isoCode !== currency || !Array.isArray(payload.rates)) throw new Error("Unerwartete Kursantwort.");
+  return payload.rates.map((row: { referenceDate?: unknown; avgRate?: unknown; exchangeConvention?: unknown }) => {
+    const rate = Number(row.avgRate);
+    if (typeof row.referenceDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(row.referenceDate) || !Number.isFinite(rate) || rate <= 0 || typeof row.exchangeConvention !== "string" || !/foreign currency amount for 1 euro/i.test(row.exchangeConvention)) throw new Error("Ungültiger Banca-d’Italia-Kurs.");
+    return { date: row.referenceDate, rate };
+  }).filter((row: RatePoint) => row.date >= subtractDays(from, 10) && row.date <= to).sort((a: RatePoint, b: RatePoint) => a.date.localeCompare(b.date));
 }
 
 export async function GET(request: Request) {
@@ -288,22 +226,12 @@ export async function GET(request: Request) {
   ) as Record<string, string>;
 
   if (missing.length) {
-    const monthResults = await Promise.allSettled(
-      monthsBetween(from, to).map(({ year, month }) =>
-        fetchInforEuroMonth(year, month),
-      ),
-    );
-    for (const result of monthResults) {
-      if (result.status !== "fulfilled") continue;
-      for (const currency of missing) {
-        const point = result.value[currency];
-        if (!point) continue;
-        (rates[currency] ||= []).push(point);
-        sources[currency] = "EU InforEuro";
+    const results = await Promise.allSettled(missing.map(async (currency) => ({ currency, points: await fetchBanca(currency, from, to) })));
+    for (const result of results) {
+      if (result.status === "fulfilled" && result.value.points.length) {
+        rates[result.value.currency] = result.value.points;
+        sources[result.value.currency] = "Banca d’Italia";
       }
-    }
-    for (const currency of missing) {
-      rates[currency]?.sort((a, b) => a.date.localeCompare(b.date));
     }
     missing = currencies.filter((currency) => !rates[currency]?.length);
   }
@@ -311,7 +239,7 @@ export async function GET(request: Request) {
   if (missing.length === currencies.length) {
     return Response.json(
       {
-        error: "EZB-Kurse konnten derzeit nicht geladen werden.",
+        error: "EZB- und Banca-d’Italia-Kurse konnten derzeit nicht geladen werden.",
         missing,
       },
       { status: 502 },
@@ -320,14 +248,14 @@ export async function GET(request: Request) {
 
   return Response.json(
     {
-      source: "Europäische Zentralbank / Europäische Kommission InforEuro",
+      source: "Europäische Zentralbank / Banca d’Italia",
       basis: "1 EUR",
       rates,
       sources,
       missing,
       ...(missing.length
         ? {
-            warning: `Kein EZB- oder InforEuro-Referenzkurs für: ${missing.join(", ")}`,
+            warning: `Kein EZB- oder Banca-d’Italia-Referenzkurs für: ${missing.join(", ")}`,
           }
         : {}),
     },

@@ -62,7 +62,7 @@ export const ZERO: Contribution = {
   appodealUsd: 0,
   appodealEur: 0,
 };
-export const PARSER_VERSION = 8;
+export const PARSER_VERSION = 9;
 export const GOOGLE_MOR = new Set([
   "AT",
   "BE",
@@ -742,7 +742,7 @@ async function exchangeRates(
 ) {
   const unique = [...new Set(currencies)].sort();
   const combined: FxResponse = {
-    source: "EZB / Europäische Kommission InforEuro",
+    source: "EZB / Banca d’Italia",
     basis: "1 EUR",
     rates: {},
     sources: {},
@@ -774,7 +774,8 @@ async function exchangeRates(
 }
 
 function rateOnOrBefore(points: FxPoint[] | undefined, date: string) {
-  return [...(points || [])].reverse().find((point) => point.date <= date);
+  const point = [...(points || [])].reverse().find((item) => item.date <= date);
+  return point && Date.parse(date) - Date.parse(point.date) <= 10 * 86400000 ? point : undefined;
 }
 
 export type InspectionOptions = {
@@ -1146,7 +1147,7 @@ export async function inspectFile(
           missingRates = foreign.length;
           indicativeFx = foreign.some((item) => item.entity === "adi");
           fxSummary =
-            " · Fremdwährungszeilen konnten derzeit nicht mit EZB-/InforEuro-Kurs umgerechnet werden";
+            " · Fremdwährungszeilen konnten derzeit nicht mit EZB-/Banca-d’Italia-Kurs umgerechnet werden";
         }
       }
       const totalEur = entityTotals.adi;
@@ -1171,7 +1172,7 @@ export async function inspectFile(
           periodStart: applePeriod?.start,
           periodEnd: applePeriod?.end,
           unresolvedAppleCountries: [...unknown].sort(),
-          message: `Kalenderzuordnung nach Transaktionsdatum · ${applePeriod ? `Berichtszeitraum ${applePeriod.start} bis ${applePeriod.end} · ` : "Berichtszeitraum fehlt · "}${missingAppleDates ? `${missingAppleDates} Apple-Irland-Zeilen: Datum fehlt, nicht in ZM-Summe enthalten · ` : ""}${indicativeFx ? "InforEuro nur Schätzung: bestätigte EUR-Abrechnung/Kursbeleg fehlt · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
+          message: `Kalenderzuordnung nach Transaktionsdatum · ${applePeriod ? `Berichtszeitraum ${applePeriod.start} bis ${applePeriod.end} · ` : "Berichtszeitraum fehlt · "}${missingAppleDates ? `${missingAppleDates} Apple-Irland-Zeilen: Datum fehlt, nicht in ZM-Summe enthalten · ` : ""}${indicativeFx ? "Banca-d’Italia-Tageskurse: steuerliche Anwendung und Kursdatum prüfen · " : ""}Financial Detailed · ${rs.length} Transaktionen · ADI/Irland ${money(totalEur)} (ZM)${otherEntities ? ` · ${otherEntities}` : ""}${unknown.size ? ` · ungeklärte neue Ländercodes: ${[...unknown].sort().join(", ")}` : ""}${fxSummary}`,
           contribution: { ...ZERO, appleZm: totalEur },
         },
         blob: file,
