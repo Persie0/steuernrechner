@@ -83,7 +83,7 @@ export function prepareProviderRequest(payload: Payload): Upstream {
   }
   if (kind === "google_file") {
     fields(payload, ["kind", "bucket", "token", "object"]);
-    const bucket = field(payload, "bucket", /^pubsite_prod_rev_\d{4,32}$/);
+    const bucket = field(payload, "bucket", /^pubsite_prod_(?:rev_)?\d{4,32}$/);
     const object = field(
       payload,
       "object",
