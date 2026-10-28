@@ -216,6 +216,9 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       setS((c) => ({
         ...c,
         reports: c.reports.map((r) => updates.get(r.id) || r),
+        reviews: updates.size
+          ? Object.fromEntries(Object.entries(c.reviews).map(([period, value]) => [period, { ...value, reviewed: false }]))
+          : c.reviews,
       }));
     })();
   }, [ready, s.reports]);

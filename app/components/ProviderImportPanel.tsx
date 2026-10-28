@@ -1,24 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   PROVIDER_STORAGE_KEY,
-  type AppleCredentials,
   type GoogleServiceAccount,
 } from "../lib/provider-auth";
 import {
   downloadAppleReports,
   downloadGoogleReports,
   downloadAppodealReport,
+  configuredProviders,
+  type ProviderCredentials as Credentials,
+  type ProviderName as Provider,
 } from "../lib/provider-import";
 import type { UploadFeedback } from "../lib/importer";
+import { buildProviderDebugZip, type ProviderDebug } from "../lib/provider-debug";
 
-type Provider = "apple" | "google" | "appodeal";
-type Credentials = {
-  apple: AppleCredentials;
-  google: { bucket: string; serviceAccountJson: string };
-  appodeal: { apiKey: string; userId: string };
-};
 const empty = (): Credentials => ({
   apple: { issuerId: "", keyId: "", vendor: "", privateKey: "" },
   google: { bucket: "", serviceAccountJson: "" },
@@ -33,6 +30,7 @@ export default function ProviderImportPanel({
   cancelImport,
   onBusyChange,
   onImportFeedback,
+  debug,
 }: {
   year: number;
   quarter: number;
@@ -41,38 +39,52 @@ export default function ProviderImportPanel({
   cancelImport: () => void;
   onBusyChange: (busy: boolean) => void;
   onImportFeedback: (feedback: UploadFeedback[]) => void;
+  debug: ProviderDebug;
 }) {
   const [credentials, setCredentials] = useState<Credentials>(empty);
-  const [running, setRunning] = useState<Provider | null>(null);
+  const [running, setRunning] = useState<Provider | "all" | null>(null);
+  const [automaticCredentials, setAutomaticCredentials] = useState<Credentials | null>(null);
+  const autoStarted = useRef(false);
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [debugCount, setDebugCount] = useState(debug.events.length);
+  const [debugDownloading, setDebugDownloading] = useState(false);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => {
+    let active = true;
     const load = () => {
+      if (!active) return;
       try {
         const saved = JSON.parse(
           localStorage.getItem(PROVIDER_STORAGE_KEY) || "{}",
         );
         const blank = empty();
-        setCredentials({
+        const loaded: Credentials = {
           apple: { ...blank.apple, ...saved.apple },
           google: { ...blank.google, ...saved.google },
           appodeal: { ...blank.appodeal, ...saved.appodeal },
-        });
+        };
+        setCredentials(loaded);
+        setAutomaticCredentials(loaded);
       } catch {
         setCredentials(empty());
+        setAutomaticCredentials(empty());
       }
     };
     const cleared = () => {
       controller.current?.abort();
       setCredentials(empty());
+      setAutomaticCredentials(null);
+      setDebugCount(0);
       setMessage("");
       setWarnings([]);
     };
     queueMicrotask(load);
     window.addEventListener("provider-credentials-cleared", cleared);
     return () => {
+      active = false;
       controller.current?.abort();
+      autoStarted.current = false;
       window.removeEventListener("provider-credentials-cleared", cleared);
     };
   }, []);
@@ -112,89 +124,100 @@ export default function ProviderImportPanel({
       setMessage("Zugang konnte nicht entfernt werden.");
     }
   }
-  async function run(provider: Provider) {
-    if (running || disabled) return;
+  const run = useCallback(async (providers: Provider[], access: Credentials) => {
+    if (controller.current || disabled || !providers.length) return;
     const abort = new AbortController();
     controller.current = abort;
-    setRunning(provider);
+    setRunning(providers.length === 1 ? providers[0] : "all");
     onBusyChange(true);
     setWarnings([]);
+    let count = 0;
+    const allWarnings: string[] = [], allFeedback: UploadFeedback[] = [];
+    const secrets = [access.apple.privateKey, access.google.serviceAccountJson, access.appodeal.apiKey];
     try {
-      const options = { signal: abort.signal, progress: setMessage };
-      let result;
-      if (provider === "apple")
-        result = await downloadAppleReports(
-          credentials.apple,
-          year,
-          quarter,
-          options,
-        );
-      else if (provider === "google") {
-        let serviceAccount: GoogleServiceAccount;
+      for (const provider of providers) {
+        if (abort.signal.aborted) break;
+        const label = provider === "apple" ? "Apple" : provider === "google" ? "Google" : "Appodeal";
+        const options = {
+          signal: abort.signal,
+          progress: setMessage,
+          debug,
+          onDebug: () => { if (!abort.signal.aborted) setDebugCount(debug.events.length); },
+        };
         try {
-          serviceAccount = JSON.parse(credentials.google.serviceAccountJson);
-        } catch {
-          throw new Error(
-            "Bitte ein gültiges Google Service-Account-JSON auswählen.",
-          );
+          let result;
+          if (provider === "apple")
+            result = await downloadAppleReports(access.apple, year, quarter, options);
+          else if (provider === "google") {
+            let serviceAccount: GoogleServiceAccount;
+            try {
+              serviceAccount = JSON.parse(access.google.serviceAccountJson);
+            } catch {
+              throw new Error("Bitte ein gültiges Google Service-Account-JSON auswählen.");
+            }
+            result = await downloadGoogleReports(
+              { bucket: access.google.bucket.trim().replace(/^gs:\/\//, "").split("/")[0], serviceAccount },
+              year, quarter, options,
+            );
+          } else
+            result = await downloadAppodealReport(access.appodeal, year, quarter, options);
+          if (abort.signal.aborted) break;
+          allWarnings.push(...result.warnings.map((warning) => `${label}: ${warning}`));
+          for (const warning of result.warnings) debug.addNote(provider, warning, secrets);
+          if (result.files.length) {
+            count += result.files.length;
+            setMessage(`${label}: ${result.files.length} Dateien abgerufen; werden lokal importiert …`);
+            const feedback = await importFiles(result.files);
+            allFeedback.push(...feedback);
+            for (const item of feedback) debug.addNote(provider, `Import: ${item.message}`, secrets);
+            setDebugCount(debug.events.length);
+            onImportFeedback([...allFeedback]);
+            if (feedback.some((item) => item.level === "error"))
+              allWarnings.push(`${label}: Beim lokalen Import sind Fehler aufgetreten. Bitte Importmeldungen prüfen.`);
+          }
+        } catch (error) {
+          if (abort.signal.aborted) break;
+          const message = error instanceof Error ? error.message : "Abruf fehlgeschlagen.";
+          allWarnings.push(`${label}: ${message}`);
+          debug.addNote(provider, `Fehler: ${message}`, secrets);
+          setDebugCount(debug.events.length);
         }
-        result = await downloadGoogleReports(
-          {
-            bucket: credentials.google.bucket
-              .trim()
-              .replace(/^gs:\/\//, "")
-              .split("/")[0],
-            serviceAccount,
-          },
-          year,
-          quarter,
-          options,
-        );
-      } else
-        result = await downloadAppodealReport(
-          credentials.appodeal,
-          year,
-          quarter,
-          options,
-        );
-      if (abort.signal.aborted) return;
-      setWarnings(result.warnings);
-      if (result.files.length) {
-        setMessage(
-          `${result.files.length} Dateien abgerufen; werden lokal importiert …`,
-        );
-        const feedback = await importFiles(result.files);
-        onImportFeedback(feedback);
-        if (abort.signal.aborted) {
-          setMessage(
-            "Import gestoppt; bereits verarbeitete Dateien bleiben gespeichert.",
-          );
-          return;
-        }
-        if (feedback.some((item) => item.level === "error"))
-          setWarnings((old) => [
-            ...old,
-            "Beim lokalen Import sind Fehler aufgetreten. Bitte Importmeldungen prüfen.",
-          ]);
-        setMessage(
-          `${result.files.length} Dateien abgerufen. Ergebnisse stehen unten bei den Importmeldungen.`,
-        );
-      } else setMessage("Kein Bericht abgerufen. Hinweise unten prüfen.");
-    } catch (error) {
-      setMessage(
-        abort.signal.aborted
-          ? "Abruf gestoppt."
-          : error instanceof Error
-            ? error.message
-            : "Abruf fehlgeschlagen.",
-      );
+      }
+      setWarnings(allWarnings);
+      setMessage(abort.signal.aborted
+        ? "Abruf gestoppt; bereits verarbeitete Dateien bleiben gespeichert."
+        : count
+          ? `${count} Dateien abgerufen. Ergebnisse stehen unten bei den Importmeldungen.`
+          : "Kein Bericht abgerufen. Hinweise unten prüfen.");
     } finally {
       if (controller.current === abort) controller.current = null;
       setRunning(null);
       onBusyChange(false);
     }
-  }
+  }, [disabled, year, quarter, importFiles, onBusyChange, onImportFeedback, debug]);
+  useEffect(() => {
+    if (!automaticCredentials || disabled || autoStarted.current || controller.current) return;
+    autoStarted.current = true;
+    const providers = configuredProviders(automaticCredentials);
+    if (providers.length) void run(providers, automaticCredentials);
+  }, [automaticCredentials, disabled, run]);
   const locked = !!running || disabled;
+  async function downloadDebug() {
+    setDebugDownloading(true);
+    try {
+      const bytes = await buildProviderDebugZip(debug);
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `api-debug-Q${quarter}-${year}.zip`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      setMessage("Debug-ZIP konnte nicht erstellt werden.");
+    } finally {
+      setDebugDownloading(false);
+    }
+  }
   const actions = (provider: Provider) => (
     <div className="providerActions">
       <button
@@ -217,7 +240,10 @@ export default function ProviderImportPanel({
         type="button"
         className="uploadBtn"
         disabled={locked}
-        onClick={() => void run(provider)}
+        onClick={() => {
+          save(provider);
+          void run([provider], credentials);
+        }}
       >
         Für Q{quarter}/{year} abrufen
       </button>
@@ -230,8 +256,14 @@ export default function ProviderImportPanel({
     >
       <h3>Berichte automatisch abrufen</h3>
       <p>
-        Optional: Zugang einmal einrichten und Berichte für das gewählte Quartal
-        abrufen. Du kannst Dateien weiterhin selbst hochladen.
+        Gespeicherte Zugänge werden beim Öffnen dieses Schritts für das gewählte
+        Quartal automatisch abgerufen. Beim manuellen Abruf wird der jeweilige
+        Zugang ebenfalls in diesem Browser gespeichert. Du kannst Dateien
+        weiterhin selbst hochladen.
+      </p>
+      <p className="hint">
+        Der automatische Abruf läuft, solange diese Seite geöffnet ist. Noch
+        nicht veröffentlichte Berichte werden beim nächsten Öffnen erneut geprüft.
       </p>
       <p className="hint">
         Gespeicherte Zugangsdaten liegen nur in diesem Browser. Beim Abruf
@@ -443,6 +475,16 @@ export default function ProviderImportPanel({
           ))}
         </ul>
       )}
+      <div className="providerDebug">
+        <button type="button" className="secondaryBtn" disabled={!debugCount || locked || debugDownloading} onClick={() => void downloadDebug()}>
+          Debug-ZIP herunterladen{debugCount ? ` · ${debugCount} Einträge` : ""}
+        </button>
+        <p className="hint">
+          Enthält die unveränderten empfangenen Berichtsdateien und ein Protokoll
+          dieser Sitzung. Die Dateien können vertrauliche Finanzdaten enthalten;
+          Schlüssel, Tokens und Anmeldeantworten werden nicht protokolliert.
+        </p>
+      </div>
     </section>
   );
 }
