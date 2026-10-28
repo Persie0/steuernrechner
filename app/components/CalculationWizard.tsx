@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { parseExpenseJson } from "../lib/expense-json";
 import { useEffect, useMemo, useState } from "react";
 import { formatBytes, useUst, type UploadFeedback } from "./UstProvider";
 import { money, vatBalance, type ExpenseDraft } from "../lib/tax";
@@ -213,6 +214,19 @@ export default function CalculationWizard() {
     [feedback, setFeedback] = useState<UploadFeedback[]>([]),
     [showFiles, setShowFiles] = useState(false),
     [showCorrection, setShowCorrection] = useState(false);
+  const [expenseJson, setExpenseJson] = useState("");
+  const [expenseJsonMessage, setExpenseJsonMessage] = useState("");
+  function loadExpenseJson(text: string) {
+    try {
+      const drafts = parseExpenseJson(text);
+      const fresh = drafts.filter((draft) => !expenseOverrides[draft.id]);
+      for (const draft of fresh) updateExpense(draft);
+      setReview({ expenses: "yes", expensesComplete: false, reviewed: false });
+      setExpenseJsonMessage(`${fresh.length} Ausgaben importiert; ${drafts.length - fresh.length} vorhandene Bearbeitungen beibehalten. Alle Daten und Belege prüfen.`);
+    } catch (error) {
+      setExpenseJsonMessage(error instanceof Error ? error.message : "JSON konnte nicht gelesen werden.");
+    }
+  }
   const [providerDebug] = useState(createProviderDebug);
   useEffect(() => {
     const clear = () => providerDebug.clear();
@@ -578,25 +592,19 @@ export default function CalculationWizard() {
       {step === 3 && (
         <section className="wizardPanel">
           <p className="eyebrow">3 · Ausgaben</p>
-          <h2>Hattest du zusätzliche betriebliche Ausgaben?</h2>
-          <p>
-            Google-Plattformgebühren sind bereits aus den Earnings erfasst. Hier
-            prüfst du beispielsweise OpenAI, Apple Developer, Hardware, SVS und
-            WKO.
-          </p>
+          <h2>Ausgaben aus JSON importieren und prüfen</h2>
+          <p>Lade die vorbereitete JSON-Datei hoch oder füge ihren Inhalt ein. Lade die Originalbelege in Schritt 2 hoch. Jeder Eintrag bleibt bis zur Prüfung unbestätigt.</p>
+          <label>Ausgaben-JSON hochladen
+            <input type="file" accept="application/json,.json" onChange={(e) => { const file = e.target.files?.[0]; if (file) void file.text().then((text) => { setExpenseJson(text); loadExpenseJson(text); }); e.target.value = ""; }} />
+          </label>
+          <label>JSON-Inhalt
+            <textarea value={expenseJson} onChange={(e) => setExpenseJson(e.target.value)} rows={5} />
+          </label>
+          <button className="secondaryBtn" onClick={() => loadExpenseJson(expenseJson)}>JSON importieren</button>
+          {expenseJsonMessage && <p role="status">{expenseJsonMessage}</p>}
           <div className="answerButtons">
-            <button
-              className={review.expenses === "yes" ? "selected" : ""}
-              onClick={() => setReview({ expenses: "yes", reviewed: false })}
-            >
-              Ja, Ausgaben prüfen
-            </button>
-            <button
-              className={review.expenses === "no" ? "selected" : ""}
-              onClick={() => setReview({ expenses: "no", reviewed: false })}
-            >
-              Nein, keine zusätzlichen Ausgaben
-            </button>
+            <button className={review.expenses === "yes" ? "selected" : ""} onClick={() => setReview({ expenses: "yes", reviewed: false })}>Ausgaben vorhanden</button>
+            <button className={review.expenses === "no" ? "selected" : ""} onClick={() => setReview({ expenses: "no", reviewed: false })}>Keine zusätzlichen Ausgaben</button>
           </div>
           {expenses.length > 0 && (
             <p>
