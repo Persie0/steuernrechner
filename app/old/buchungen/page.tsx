@@ -10,8 +10,8 @@ import {
   useBooks,
   vatCaseLabels,
   VatCase,
-} from "../components/BookkeepingProvider";
-import {money} from "../lib/tax";
+} from "../../components/BookkeepingProvider";
+import {money} from "../../lib/tax";
 
 const today = new Date().toISOString().slice(0, 10);
 const empty = {

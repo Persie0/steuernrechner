@@ -399,6 +399,7 @@ export type ExpenseDraft = {
   id: string;
   title: string;
   sourceName: string;
+  attachmentId?: string;
   date: string;
   paymentDate: string;
   serviceDate: string;

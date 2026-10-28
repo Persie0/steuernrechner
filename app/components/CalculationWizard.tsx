@@ -31,7 +31,7 @@ const monthNames = [
 const steps = ["Quartal", "Belege", "Ausgaben", "Prüfen", "UVA & ZM"];
 
 function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
-  const { updateExpense } = useUst();
+  const { updateExpense, reports, downloadReport } = useUst();
   const change = (patch: Partial<ExpenseDraft>) =>
     updateExpense({
       ...expense,
@@ -48,6 +48,13 @@ function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
         <span>{expense.confirmed ? "Geprüft" : "Bitte prüfen"}</span>
       </div>
       <small>{expense.sourceName}</small>
+      <label>Originalbeleg zuordnen
+        <select value={expense.attachmentId || ""} onChange={(e) => change({ attachmentId: e.target.value || undefined })}>
+          <option value="">Noch kein Original zugeordnet</option>
+          {reports.map((report) => <option key={report.id} value={report.id}>{report.name}</option>)}
+        </select>
+      </label>
+      {expense.attachmentId && <button type="button" className="secondaryBtn" onClick={() => void downloadReport(expense.attachmentId!)}>Zugeordneten Beleg herunterladen</button>}
       <label>
         Beschreibung / Lieferant
         <input
@@ -220,7 +227,13 @@ export default function CalculationWizard() {
     try {
       const drafts = parseExpenseJson(text);
       const fresh = drafts.filter((draft) => !expenseOverrides[draft.id]);
-      for (const draft of fresh) updateExpense(draft);
+      for (const draft of fresh) {
+        const sourceName = draft.sourceName.split(/[\\/]/).pop()?.toLowerCase();
+        const byName = reports.filter((report) => report.name.toLowerCase() === sourceName && report.source !== "kalkuel");
+        const byExpense = reports.filter((report) => report.source === "expense" && report.expenses?.some((expense) => expense.id === draft.id));
+        const matches = byName.length ? byName : byExpense;
+        updateExpense({ ...draft, attachmentId: matches.length === 1 ? matches[0].id : undefined });
+      }
       setReview({ expenses: "yes", expensesComplete: false, reviewed: false });
       setExpenseJsonMessage(`${fresh.length} Ausgaben importiert; ${drafts.length - fresh.length} vorhandene Bearbeitungen beibehalten. Alle Daten und Belege prüfen.`);
     } catch (error) {
@@ -892,6 +905,12 @@ export default function CalculationWizard() {
               Originale + Quartalsstand als ZIP
             </button>
           </div>
+          {review.submittedZm && review.submittedZmSnapshot && (() => {
+            const previous = review.submittedZmSnapshot;
+            const changed = previous.length !== rows.length || previous.some((old) => !rows.some((current) => current.uid === old.uid && Math.trunc(current.exact) === Math.trunc(old.exact)));
+            return <p className="callout">{changed ? "Die aktuellen ZM-Werte unterscheiden sich vom gespeicherten Abgabestand. Bitte mit FinanzOnline vergleichen und eine Berichtigung prüfen." : "Die aktuellen ZM-Werte stimmen mit dem gespeicherten Abgabestand überein."} Der gespeicherte Stand entspricht den Werten beim Setzen des Häkchens; das FinanzOnline-Protokoll bleibt maßgeblich.</p>;
+          })()}
+          {review.submittedZm && !review.submittedZmSnapshot && <p className="callout">Für die bereits markierte ZM wurde kein Vergleichsstand gespeichert. Bitte Abgabewerte anhand des FinanzOnline-Protokolls prüfen.</p>}
           <div className="submissionChecks">
             <label className="checkLine">
               <input
@@ -905,7 +924,7 @@ export default function CalculationWizard() {
               <input
                 type="checkbox"
                 checked={review.submittedZm}
-                onChange={(e) => setReview({ submittedZm: e.target.checked })}
+                onChange={(e) => setReview({ submittedZm: e.target.checked, submittedZmSnapshot: e.target.checked ? rows.map((row) => ({ ...row })) : undefined })}
               />{" "}
               ZM eingebracht und positives Produktionsprotokoll gespeichert
             </label>
