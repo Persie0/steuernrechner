@@ -57,6 +57,108 @@ export function mergeExpenses(
   for (const expense of Object.values(overrides)) map.set(expense.id, expense);
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
+export function expenseAffectedPeriods(previous: ExpenseDraft | undefined, next: ExpenseDraft): string[] {
+  return [...new Set([previous?.date, next.date].flatMap((date) => {
+    if (!date || !/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return [];
+    return [periodKey(Number(date.slice(0, 4)), Math.ceil(Number(date.slice(5, 7)) / 3))];
+  }))];
+}
+
+// Report values are not bank receipts. Keep the two bases explicit in the UI.
+export function summarizeOverview(
+  reports: StoredReport[],
+  expenses: ExpenseDraft[],
+  year: number | null,
+  quarter: number | null,
+) {
+  const matches = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    (!year || Number(date.slice(0, 4)) === year) &&
+    (!quarter || Math.ceil(Number(date.slice(5, 7)) / 3) === quarter);
+  const candidates = reports.filter((r) => ["google", "apple_financial", "appodeal"].includes(r.source) && r.level !== "error");
+  const hashes = new Set<string>();
+  const unique = candidates.filter((r) => {
+    const key = r.sha256 || r.id;
+    if (hashes.has(key)) return false;
+    hashes.add(key);
+    return true;
+  });
+  const conflicts = new Set<string>();
+  for (let i = 0; i < unique.length; i++) for (let j = i + 1; j < unique.length; j++) {
+    const a = unique[i], b = unique[j];
+    if (a.source !== b.source) continue;
+    const sameMonth = a.source !== "apple_financial" && a.year && a.month && a.year === b.year && a.month === b.month;
+    const overlappingApple = a.source === "apple_financial" && a.periodStart && a.periodEnd && b.periodStart && b.periodEnd && a.periodStart <= b.periodEnd && b.periodStart <= a.periodEnd;
+    if (sameMonth || overlappingApple) { conflicts.add(a.id); conflicts.add(b.id); }
+  }
+  const warnings = new Set<string>();
+  if (year && quarter && reports.some((report) => report.source === "google")) {
+    const missing = [quarter * 3 - 2, quarter * 3 - 1, quarter * 3].filter((month) => !unique.some((report) => report.source === "google" && report.year === year && report.month === month && !conflicts.has(report.id)));
+    if (missing.length) warnings.add(`Google-Earnings fehlen oder sind ungeklärt: ${missing.join(", ")}/${year}.`);
+  }
+  if (year && quarter && reports.some((report) => report.source === "apple_financial")) {
+    const { from, to } = quarterDates(year, quarter);
+    const periods = unique.filter((report) => report.source === "apple_financial" && !conflicts.has(report.id) && report.periodStart && report.periodEnd && report.periodStart <= to && report.periodEnd >= from).sort((a, b) => a.periodStart!.localeCompare(b.periodStart!));
+    let coveredUntil = from;
+    for (const report of periods) {
+      if (report.periodStart! > coveredUntil) break;
+      const next = new Date(`${report.periodEnd}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + 1);
+      if (next.toISOString().slice(0, 10) > coveredUntil) coveredUntil = next.toISOString().slice(0, 10);
+    }
+    if (coveredUntil <= to) warnings.add(`Apple-Finanzberichte decken den Zeitraum bis ${to} nicht vollständig ab; Sales-Tagesberichte werden nicht zusätzlich eingerechnet.`);
+  }
+  const relevant = (report: StoredReport) => {
+    if (!year && !quarter) return true;
+    if (report.income?.some((item) => matches(item.date))) return true;
+    if (Object.keys(report.monthly || {}).some((month) => matches(`${month}-01`))) return true;
+    if (year && report.periodStart && report.periodEnd) {
+      const range = quarter ? quarterDates(year, quarter) : { from: `${year}-01-01`, to: `${year}-12-31` };
+      return report.periodStart <= range.to && report.periodEnd >= range.from;
+    }
+    if (report.year && report.month) return matches(`${report.year}-${String(report.month).padStart(2, "0")}-01`);
+    if (year && report.year) return report.year === year;
+    return true;
+  };
+  for (const report of reports) {
+    if (["google", "apple_financial", "appodeal"].includes(report.source) && report.level === "error" && relevant(report))
+      warnings.add(`${report.name}: Bericht konnte nicht ausgewertet werden; Werte fehlen in der Übersicht.`);
+  }
+  const incomeRows: { date: string; amount: number; entity: string; source: string; reportId: string; reportName: string }[] = [];
+  for (const report of unique) {
+    if (!relevant(report)) continue;
+    if (conflicts.has(report.id)) {
+      const period = report.periodStart && report.periodEnd ? `${report.periodStart}–${report.periodEnd}` : `${report.year}-${String(report.month || 0).padStart(2, "0")}`;
+      warnings.add(`${report.source}: Überschneidende Berichte für ${period} sind nicht im Ergebnis enthalten; bitte abgleichen.`);
+      continue;
+    }
+    if (report.source === "appodeal") {
+      if (report.year && report.month) {
+        const date = new Date(Date.UTC(report.year, report.month, 0)).toISOString().slice(0, 10);
+        if (matches(date) && report.contribution.appodealEur) incomeRows.push({ date, amount: report.contribution.appodealEur, entity: "Appodeal", source: "appodeal", reportId: report.id, reportName: report.name });
+        if (matches(date) && report.contribution.appodealUsd && !report.contribution.appodealEur) warnings.add(`${report.name}: Appodeal-Betrag ohne EUR-Kurs nicht enthalten.`);
+      } else warnings.add(`${report.name}: Appodeal-Berichtsmonat fehlt.`);
+      continue;
+    }
+    if (!report.income) {
+      warnings.add(`${report.name}: Einnahmen werden noch aus dem Original ermittelt oder konnten nicht gelesen werden.`);
+      continue;
+    }
+    for (const warning of report.incomeWarnings || []) warnings.add(`${report.name}: ${warning}`);
+    for (const item of report.income) if (matches(item.date)) incomeRows.push({ ...item, source: report.source, reportId: report.id, reportName: report.name });
+  }
+  incomeRows.sort((a, b) => b.date.localeCompare(a.date) || a.entity.localeCompare(b.entity));
+  const includedExpenses = expenses.filter((e) => !e.excluded && matches(e.paymentDate || e.date));
+  const paidExpenses = includedExpenses.filter((e) => !!e.paymentDate);
+  const unpaidExpenses = includedExpenses.length - paidExpenses.length;
+  const expenseTotal = roundCent(paidExpenses.reduce((sum, e) => sum + (e.businessNet ?? e.net * e.share / 100), 0));
+  const incomeTotal = roundCent(incomeRows.reduce((sum, item) => sum + item.amount, 0));
+  const incomeBySource = {
+    google: roundCent(incomeRows.filter((item) => item.source === "google").reduce((sum, item) => sum + item.amount, 0)),
+    apple: roundCent(incomeRows.filter((item) => item.source === "apple_financial").reduce((sum, item) => sum + item.amount, 0)),
+    appodeal: roundCent(incomeRows.filter((item) => item.source === "appodeal").reduce((sum, item) => sum + item.amount, 0)),
+  };
+  return { incomeTotal, incomeBySource, incomeRows, expenseTotal, balance: roundCent(incomeTotal - expenseTotal), unpaidExpenses, unconfirmedExpenses: includedExpenses.filter((e) => !e.confirmed).length, warnings: [...warnings] };
+}
 export function summarizeQuarter(
   reports: StoredReport[],
   overrides: Record<string, ExpenseDraft>,

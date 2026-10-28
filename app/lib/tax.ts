@@ -20,6 +20,7 @@ export type Contribution = {
   appodealUsd: number;
   appodealEur: number;
 };
+export type ReportIncome = { date: string; amount: number; entity: string };
 export type StoredReport = {
   id: string;
   source: Source;
@@ -45,6 +46,8 @@ export type StoredReport = {
   indicativeFx?: boolean;
   fxProofs?: { currency: string; from: string; to: string }[];
   expenses?: ExpenseDraft[];
+  income?: ReportIncome[];
+  incomeWarnings?: string[];
 };
 export type Values = {
   kz000: number;
@@ -64,6 +67,15 @@ export const ZERO: Contribution = {
   appodealEur: 0,
 };
 export const PARSER_VERSION = 9;
+function groupedIncome(items: ReportIncome[]): ReportIncome[] {
+  const grouped = new Map<string, ReportIncome>();
+  for (const item of items) {
+    const key = `${item.date}\u0000${item.entity}`;
+    const prior = grouped.get(key);
+    grouped.set(key, { ...item, amount: (prior?.amount || 0) + item.amount });
+  }
+  return [...grouped.values()].sort((a, b) => a.date.localeCompare(b.date) || a.entity.localeCompare(b.entity));
+}
 export const GOOGLE_MOR = new Set([
   "AT",
   "BE",
@@ -945,10 +957,24 @@ export async function inspectFile(
       let zm = 0,
         fees = 0,
         relevant = 0;
+      const income: ReportIncome[] = [];
+      const incomeWarnings = new Set<string>();
+      const incomeTypes = new Set([
+        "Charge", "Charge refund", "Charge rebill", "Google fee", "Google fee refund", "Google fee rebill",
+        "Tax", "Tax refund", "Tax rebill", "Adjustment", "Chargeback", "Chargeback reversal",
+        "User charge", "User charge refund", "User charge partial refund", "Google fee partial refund", "Tax partial refund",
+      ]);
       for (const r of rs) {
         const t = r["Transaction Type"] || "",
           a = num(r["Amount (Merchant Currency)"]),
           c = (r["Buyer Country"] || "").toUpperCase();
+        if (a && incomeTypes.has(t)) {
+          const date = isoDate(r["Transaction Date"] || "");
+          if (date) income.push({ date, amount: a, entity: "Google Play" });
+          else incomeWarnings.add("Google-Zeilen ohne lesbares Transaktionsdatum fehlen in der Übersicht.");
+        } else if (a && !incomeTypes.has(t)) {
+          incomeWarnings.add(`Google-Zeilentyp „${t || "unbekannt"}“ ist nicht in der Übersicht berücksichtigt.`);
+        }
         if (
           [
             "Charge",
@@ -972,6 +998,8 @@ export async function inspectFile(
           ...base,
           ...p,
           rows: rs.length,
+          income: groupedIncome(income),
+          incomeWarnings: [...incomeWarnings],
           message: `${relevant}/${rs.length} relevante Zeilen · GCL ZM ${money(zm)} · separat bezogene Gebühren außerhalb Wiederverkaufsgebieten ${money(fees)} (Vertragsmodell prüfen; Gebührenrechnungen nur Abgleich, nicht nochmals addieren)`,
           contribution: {
             ...ZERO,
@@ -1077,9 +1105,12 @@ export async function inspectFile(
         amount: number;
         currency: string;
         date: string;
+        dateKnown: boolean;
       }[] = [];
       const monthly: Record<string, Contribution> = {};
       const unknown = new Set<string>();
+      const income: ReportIncome[] = [];
+      const incomeWarnings = new Set<string>();
       let missingAppleDates = 0;
       for (const r of rs) {
         const country = (r["Country of Sale"] || "").toUpperCase();
@@ -1091,7 +1122,10 @@ export async function inspectFile(
         let amount = rawExtended ? num(rawExtended) : qty * share;
         if (kind === "R" && amount > 0) amount = -amount;
         if (!entity) {
-          if (country && amount) unknown.add(country);
+          if (amount) {
+            unknown.add(country || "unbekannt");
+            incomeWarnings.add(`Apple-Land ${country || "unbekannt"} ist keinem Vertragspartner zugeordnet.`);
+          }
           continue;
         }
         const cur = (r["Partner Share Currency"] || "EUR").toUpperCase();
@@ -1101,13 +1135,16 @@ export async function inspectFile(
           );
           if (!transactionDate && entity === "adi") {
             missingAppleDates++;
+            incomeWarnings.add("Apple-Zeilen ohne Datum fehlen in der Übersicht.");
             continue;
           }
+          if (!transactionDate) incomeWarnings.add("Apple-Zeilen ohne Datum fehlen in der Übersicht.");
           items.push({
             entity,
             amount,
             currency: cur,
             date: transactionDate || fallbackDate,
+            dateKnown: !!transactionDate,
           });
         }
       }
@@ -1118,6 +1155,7 @@ export async function inspectFile(
         monthly[item.date.slice(0, 7)] ||= { ...ZERO };
         if (item.currency === "EUR") {
           entityTotals[item.entity] += item.amount;
+          if (item.dateKnown) income.push({ date: item.date, amount: item.amount, entity: APPLE_ENTITIES[item.entity].name });
           if (item.entity === "adi")
             monthly[item.date.slice(0, 7)].appleZm += item.amount;
         }
@@ -1143,10 +1181,12 @@ export async function inspectFile(
             const point = rateOnOrBefore(fx.rates[item.currency], item.date);
             if (!point) {
               missingRates++;
+              incomeWarnings.add(`Apple: Wechselkurs ${item.currency} fehlt für die Übersicht.`);
               if (item.entity === "adi") indicativeFx = true;
               continue;
             }
             entityTotals[item.entity] += item.amount / point.rate;
+            if (item.dateKnown) income.push({ date: item.date, amount: item.amount / point.rate, entity: APPLE_ENTITIES[item.entity].name });
             if (item.entity === "adi")
               monthly[item.date.slice(0, 7)].appleZm +=
                 item.amount / point.rate;
@@ -1160,6 +1200,7 @@ export async function inspectFile(
           }
         } catch {
           missingRates = foreign.length;
+          incomeWarnings.add("Apple-Fremdwährungsumsätze fehlen in der Übersicht, weil Kurse nicht geladen werden konnten.");
           indicativeFx = foreign.some((item) => item.entity === "adi");
           fxSummary =
             " · Fremdwährungszeilen konnten derzeit nicht mit EZB-/Banca-d’Italia-Kurs umgerechnet werden";
@@ -1181,6 +1222,8 @@ export async function inspectFile(
           level: !applePeriod || missingAppleDates || missingRates || unknown.size || indicativeFx ? "warn" : "ok",
           parserVersion: PARSER_VERSION,
           appleEntities: entityTotals,
+          income: groupedIncome(income),
+          incomeWarnings: [...incomeWarnings],
           monthly,
           indicativeFx,
           fxProofs,

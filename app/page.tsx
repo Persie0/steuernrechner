@@ -1,5 +1,5 @@
-import CalculationWizard from "./components/CalculationWizard";
+import OverviewDashboard from "./components/OverviewDashboard";
 
 export default function Home() {
-  return <CalculationWizard />;
+  return <OverviewDashboard />;
 }
