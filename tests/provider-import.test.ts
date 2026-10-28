@@ -418,9 +418,9 @@ test("Google uses a signed assertion and imports only matching earnings files", 
     if (request.kind === "google_token")
       return Response.json({ access_token: "test-token" });
     if (request.kind === "google_list" && !request.pageToken)
-      return Response.json({items: [{name: "earnings/earnings_202607.zip"}, {name: "earnings/earnings_202607_adjustment.zip"}, {name: "earnings/earnings_202606.zip"}], nextPageToken: "page2"});
+      return Response.json({items: [{name: "earnings/earnings_202607_123456789-31.zip"}, {name: "earnings/earnings_202607_adjustment.zip"}, {name: "earnings/earnings_202606.zip"}], nextPageToken: "page2"});
     if (request.kind === "google_list" && request.pageToken === "page2") return Response.json({items: [{name: "earnings/earnings_202608.zip"}, {name: "other/earnings_202609.zip"}]});
-    if (request.kind === "google_file" && request.object.endsWith("202607.zip"))
+    if (request.kind === "google_file" && request.object.endsWith("202607_123456789-31.zip"))
       return new Response(zipBytes as BodyInit);
     if (request.kind === "google_file") return Response.json({error:"nicht verfügbar"}, {status:404});
     throw Error("Unexpected call");
@@ -441,6 +441,7 @@ test("Google uses a signed assertion and imports only matching earnings files", 
     assert.ok(result.warnings.some((warning) => warning.includes("zusätzliche Berichtsdatei")));
     assert.ok(result.warnings.some((warning) => warning.includes("202609")));
     assert.ok(bodies.some((body) => body.includes("page2")));
+    assert.ok(bodies.some((body) => body.includes("earnings_202607_123456789-31.zip")));
     assert.ok(!bodies.some((body) => body.includes("google_file") && body.includes("adjustment")));
     const {files} = await expandImportFiles(result.files);
     const csvFile = files[0];
