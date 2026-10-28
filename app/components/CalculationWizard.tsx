@@ -688,9 +688,8 @@ export default function CalculationWizard() {
                 setReview({ modelConfirmed: e.target.checked, reviewed: false })
               }
             />{" "}
-            Standard-Store-Billing und regionale Vertragspartner geprüft. Keine
-            zusätzlichen Direktverkäufe / alternativen Zahlungen;
-            Appodeal-Vertragspartner ist das US-Unternehmen.
+            Standard-Store-Billing ohne alternative Direktverkäufe. Regionale
+            Vertragspartner und Gebührenbelege sind separat zu prüfen.
           </label>
           {review.apple && (
             <article className="card">

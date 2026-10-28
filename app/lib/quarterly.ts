@@ -30,7 +30,7 @@ export const emptyReview = (): QuarterReview => ({
   appodeal: true,
   expenses: "",
   expensesComplete: false,
-  modelConfirmed: false,
+  modelConfirmed: true,
   appleExact: "",
   appleEvidence: "",
   reviewed: false,
