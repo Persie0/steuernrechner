@@ -62,3 +62,22 @@ test("uses ECB first and Banca d’Italia for missing currencies with dated EUR 
     assert.ok(requests.some((url) => url.includes("baseCurrencyIsoCode=SAR")));
   } finally { globalThis.fetch = original; }
 });
+
+test("fetches authentic bank PDF as local proof and rejects non-PDF responses", async () => {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push(String(input));
+    assert.equal((init?.headers as Record<string,string>).Accept,"application/pdf");
+    return new Response("%PDF-1.4 test");
+  };
+  try {
+    const response = await GET(new Request("http://localhost/api/exchange-rates?currencies=SAR&from=2026-05-14&to=2026-06-14&proof=pdf"));
+    assert.equal(response.status, 200);
+    assert.match(await response.text(), /^%PDF-/);
+    assert.ok(calls[0].includes("startDate=2026-05-04"));
+    globalThis.fetch = async () => new Response("not a pdf");
+    const invalid = await GET(new Request("http://localhost/api/exchange-rates?currencies=SAR&from=2026-05-14&to=2026-06-14&proof=pdf"));
+    assert.equal(invalid.status, 502);
+  } finally { globalThis.fetch = original; }
+});

@@ -43,6 +43,7 @@ export type StoredReport = {
   periodEnd?: string;
   monthly?: Record<string, Contribution>;
   indicativeFx?: boolean;
+  fxProofs?: { currency: string; from: string; to: string }[];
   expenses?: ExpenseDraft[];
 };
 export type Values = {
@@ -1112,6 +1113,7 @@ export async function inspectFile(
       const foreign = items.filter((item) => item.currency !== "EUR");
       let missingRates = 0;
       let indicativeFx = false;
+      let fxProofs: { currency: string; from: string; to: string }[] = [];
       let fxSummary = "";
       if (foreign.length) {
         const dates = foreign.map((item) => item.date).sort();
@@ -1123,6 +1125,7 @@ export async function inspectFile(
             dates[dates.length - 1],
             options,
           );
+          fxProofs = currencies.filter((currency) => fx.sources?.[currency] === "Banca d’Italia").map((currency) => ({ currency, from: dates[0], to: dates[dates.length - 1] }));
           const used = new Set<string>();
           for (const item of foreign) {
             const point = rateOnOrBefore(fx.rates[item.currency], item.date);
@@ -1168,6 +1171,7 @@ export async function inspectFile(
           appleEntities: entityTotals,
           monthly,
           indicativeFx,
+          fxProofs,
           missingAppleDates,
           periodStart: applePeriod?.start,
           periodEnd: applePeriod?.end,

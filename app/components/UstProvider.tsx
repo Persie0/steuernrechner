@@ -122,6 +122,28 @@ async function getFile(id: string) {
   db.close();
   return value;
 }
+async function saveFxProofs(reports: StoredReport[], existing: StoredReport[], signal?: AbortSignal) {
+  const proofs: StoredReport[] = [], warnings: string[] = [];
+  const known = new Set(existing.map((report) => report.id));
+  for (const report of reports) for (const item of report.fxProofs || []) {
+    const id = `fxproof:${item.currency}:${item.from}:${item.to}`;
+    if (known.has(id) || signal?.aborted) continue;
+    try {
+      const params = new URLSearchParams({ currencies: item.currency, from: item.from, to: item.to, proof: "pdf" });
+      const response = await fetch(`/api/exchange-rates?${params}`, { signal, cache: "no-store" });
+      if (!response.ok) throw new Error("PDF nicht verfügbar");
+      const blob = await response.blob();
+      const file = new File([blob], `Kursnachweis_Banca_${item.currency}_${item.from}_${item.to}.pdf`, { type: "application/pdf" });
+      const parsed = await inspectFile("attachment", file);
+      const record = { ...parsed.record, id, message: `Banca d’Italia · ${item.currency} · ${item.from} bis ${item.to}; PDF enthält auch zurückliegende Kurstage.` };
+      await putFile(record, blob);
+      proofs.push(record); known.add(id);
+    } catch {
+      if (!signal?.aborted) warnings.push(`Kursnachweis ${item.currency} konnte nicht gespeichert werden.`);
+    }
+  }
+  return { proofs, warnings };
+}
 async function deleteFile(id: string) {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
@@ -219,9 +241,13 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           updates.set(report.id, updated);
         } catch {}
       }
+      const saved = await saveFxProofs([...updates.values()], s.reports);
+      if (saved.warnings.length) for (const [id, record] of updates) {
+        if (record.fxProofs?.length) updates.set(id, { ...record, level: "warn", message: `${record.message} · Kursnachweis konnte nicht vollständig gespeichert werden; erneuten Import prüfen.` });
+      }
       setS((c) => ({
         ...c,
-        reports: c.reports.map((r) => updates.get(r.id) || r),
+        reports: [...c.reports.map((r) => updates.get(r.id) || r), ...saved.proofs.filter((p) => !c.reports.some((r) => r.id === p.id))],
         reviews: updates.size
           ? Object.fromEntries(Object.entries(c.reviews).map(([period, value]) => [period, { ...value, reviewed: false }]))
           : c.reviews,
@@ -452,6 +478,9 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           onFeedback: report,
           save: putFile,
         });
+        const proofResult = await saveFxProofs(result.records, reportsRef.current, controller.signal);
+        result.records.push(...proofResult.proofs);
+        for (const warning of proofResult.warnings) report({ level: "warn", message: warning });
         const merge = (current: StoredReport[]) => {
           const hashes = new Set(
             current.map((record) => record.sha256).filter(Boolean),

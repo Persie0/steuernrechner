@@ -197,6 +197,26 @@ export async function GET(request: Request) {
     );
   }
 
+  if (url.searchParams.get("proof") === "pdf") {
+    if (currencies.length !== 1 || Date.parse(to) - Date.parse(from) > 370 * 86400000)
+      return Response.json({ error: "Ungültiger Nachweiszeitraum." }, { status: 400 });
+    const proof = new URL(BANCA_URL);
+    proof.searchParams.set("startDate", subtractDays(from, 10));
+    proof.searchParams.set("endDate", to);
+    proof.searchParams.set("baseCurrencyIsoCode", currencies[0]);
+    proof.searchParams.set("currencyIsoCode", "EUR");
+    proof.searchParams.set("lang", "en");
+    try {
+      const response = await fetchWithTimeout(proof, { headers: { Accept: "application/pdf" }, cache: "no-store" }, 12000);
+      if (!response.ok) throw new Error("Abruf fehlgeschlagen");
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length > 5 * 1024 * 1024 || new TextDecoder().decode(bytes.slice(0, 5)) !== "%PDF-") throw new Error("Kein PDF");
+      return new Response(bytes, { headers: { "Content-Type": "application/pdf", "Cache-Control": "no-store" } });
+    } catch {
+      return Response.json({ error: "Kursnachweis konnte nicht geladen werden." }, { status: 502 });
+    }
+  }
+
   let rates: Record<string, RatePoint[]> = {};
 
   try {
