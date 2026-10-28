@@ -43,8 +43,6 @@ export default function ProviderImportPanel({
 }) {
   const [credentials, setCredentials] = useState<Credentials>(empty);
   const [running, setRunning] = useState<Provider | "all" | null>(null);
-  const [automaticCredentials, setAutomaticCredentials] = useState<Credentials | null>(null);
-  const autoStarted = useRef(false);
   const [message, setMessage] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [debugCount, setDebugCount] = useState(debug.events.length);
@@ -65,16 +63,13 @@ export default function ProviderImportPanel({
           appodeal: { ...blank.appodeal, ...saved.appodeal },
         };
         setCredentials(loaded);
-        setAutomaticCredentials(loaded);
       } catch {
         setCredentials(empty());
-        setAutomaticCredentials(empty());
       }
     };
     const cleared = () => {
       controller.current?.abort();
       setCredentials(empty());
-      setAutomaticCredentials(null);
       setDebugCount(0);
       setMessage("");
       setWarnings([]);
@@ -84,7 +79,6 @@ export default function ProviderImportPanel({
     return () => {
       active = false;
       controller.current?.abort();
-      autoStarted.current = false;
       window.removeEventListener("provider-credentials-cleared", cleared);
     };
   }, []);
@@ -195,12 +189,6 @@ export default function ProviderImportPanel({
       onBusyChange(false);
     }
   }, [disabled, year, quarter, importFiles, onBusyChange, onImportFeedback, debug]);
-  useEffect(() => {
-    if (!automaticCredentials || disabled || autoStarted.current || controller.current) return;
-    autoStarted.current = true;
-    const providers = configuredProviders(automaticCredentials);
-    if (providers.length) void run(providers, automaticCredentials);
-  }, [automaticCredentials, disabled, run]);
   const locked = !!running || disabled;
   async function downloadDebug() {
     setDebugDownloading(true);
@@ -260,16 +248,7 @@ export default function ProviderImportPanel({
         if (selected.length !== 2) { setMessage("Bitte zuerst vollständige Zugänge für Apple und Google eingeben. Einzelabruf ist unten möglich."); return; }
         void run(selected, credentials);
       }}>Apple und Google für Q{quarter}/{year} abrufen</button>
-      <p>
-        Gespeicherte Zugänge werden beim Öffnen dieses Schritts für das gewählte
-        Quartal automatisch abgerufen. Beim manuellen Abruf wird der jeweilige
-        Zugang ebenfalls in diesem Browser gespeichert. Du kannst Dateien
-        weiterhin selbst hochladen.
-      </p>
-      <p className="hint">
-        Der automatische Abruf läuft, solange diese Seite geöffnet ist. Noch
-        nicht veröffentlichte Berichte werden beim nächsten Öffnen erneut geprüft.
-      </p>
+      <p>Der Abruf startet nur, wenn du auf einen Abrufknopf klickst. Gespeicherte Zugänge bleiben in diesem Browser und können für das gewählte Quartal verwendet werden.</p>
       <p className="hint">
         Gespeicherte Zugangsdaten liegen nur in diesem Browser. Beim Abruf
         werden die Berichte über Vercel durchgeleitet: Apple und Google nutzen

@@ -201,6 +201,7 @@ export default function CalculationWizard() {
     importFeedback,
     cancelImport,
     removeReport,
+    removeAllReports,
     downloadReport,
     downloadAllReports,
     review,
@@ -570,6 +571,13 @@ export default function CalculationWizard() {
             {reports.length} gespeicherte Originale{" "}
             {showFiles ? "ausblenden" : "anzeigen"}
           </button>
+          {showFiles && reports.length > 0 && (
+            <button className="secondaryBtn danger" disabled={busy} onClick={() => {
+              if (!window.confirm(`Alle ${reports.length} gespeicherten Originale und daraus importierte Daten aus allen Quartalen löschen? Gespeicherte API-Zugänge bleiben erhalten.`)) return;
+              setBusy(true);
+              void removeAllReports().then(() => { setFeedback([]); setShowFiles(false); }).catch(() => setFeedback([{ level: "error", message: "Originale konnten nicht vollständig gelöscht werden." }])).finally(() => setBusy(false));
+            }}>Alle Originale löschen</button>
+          )}
           {showFiles && (
             <div className="personalFiles">
               {reports.map((r) => (

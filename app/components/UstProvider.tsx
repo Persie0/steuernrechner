@@ -73,6 +73,7 @@ type Ctx = Store & {
   ) => Promise<UploadFeedback[]>;
   importFiles: (files: FileList | File[] | null) => Promise<UploadFeedback[]>;
   removeReport: (id: string) => Promise<void>;
+  removeAllReports: () => Promise<void>;
   downloadReport: (id: string) => Promise<void>;
   downloadAllReports: () => Promise<number>;
   reset: (skipConfirm?: boolean) => Promise<boolean>;
@@ -177,6 +178,8 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     reportsRef.current = s.reports;
   }, [s.reports]);
   const migrationStarted = useRef(false),
+    migrationController = useRef(new AbortController()),
+    migrationPromise = useRef<Promise<void>>(Promise.resolve()),
     importQueue = useRef(Promise.resolve());
   useEffect(() => {
     queueMicrotask(() => {
@@ -214,9 +217,10 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     );
     if (!stale.length) return;
     migrationStarted.current = true;
-    void (async () => {
+    migrationPromise.current = (async () => {
       const updates = new Map<string, StoredReport>();
       for (const report of stale) {
+        if (migrationController.current.signal.aborted) break;
         try {
           const stored = await getFile(report.id);
           if (!stored?.blob) continue;
@@ -230,7 +234,9 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           const parsed = await inspectFile(
             dailyAttachment ? "apple_sales" : report.source,
             file,
+            { signal: migrationController.current.signal },
           );
+          if (migrationController.current.signal.aborted) break;
           if (dailyAttachment && parsed.record.level === "error") continue;
           const updated = {
             ...parsed.record,
@@ -241,7 +247,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           updates.set(report.id, updated);
         } catch {}
       }
-      const saved = await saveFxProofs([...updates.values()], s.reports);
+      const saved = await saveFxProofs([...updates.values()], s.reports, migrationController.current.signal);
       if (saved.warnings.length) for (const [id, record] of updates) {
         if (record.fxProofs?.length) updates.set(id, { ...record, level: "warn", message: `${record.message} · Kursnachweis konnte nicht vollständig gespeichert werden; erneuten Import prüfen.` });
       }
@@ -595,6 +601,31 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
       ),
     }));
   }
+  async function removeAllReports() {
+    migrationController.current.abort();
+    await migrationPromise.current;
+    await importQueue.current;
+    const db = await openDb();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction("files", "readwrite");
+        tx.objectStore("files").clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("Löschen abgebrochen."));
+      });
+    } finally { db.close(); }
+    reportsRef.current = [];
+    setS((c) => {
+      const fromReports = new Set(c.reports.flatMap((record) => (record.expenses || []).map((expense) => expense.id)));
+      return {
+        ...c,
+        reports: [],
+        expenseOverrides: Object.fromEntries(Object.entries(c.expenseOverrides).filter(([id]) => !fromReports.has(id)).map(([id, expense]) => [id, { ...expense, attachmentId: undefined, confirmed: false }])),
+        reviews: Object.fromEntries(Object.entries(c.reviews).map(([period, review]) => [period, { ...review, reviewed: false, expensesComplete: false }])),
+      };
+    });
+  }
   async function downloadReport(id: string) {
     const item = await getFile(id);
     if (!item?.blob) return;
@@ -708,6 +739,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
           enqueueImport(Array.from(files || []), source),
         importFiles,
         removeReport,
+        removeAllReports,
         downloadReport,
         downloadAllReports,
         reset,
