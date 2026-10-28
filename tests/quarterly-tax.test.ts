@@ -191,6 +191,7 @@ test("Apple sales without transaction dates stay blocked until their quarter is 
   const { record } = await inspectFile("apple_financial", new File([data], "FD_test_0726.txt"));
   assert.equal((record as typeof record & { missingAppleDates?: number }).missingAppleDates, 1);
   assert.equal(record.level, "warn");
+  assert.equal(reportContribution(record, 2026, 3).appleZm, 0);
   assert.match(record.message, /Datum fehlt/i);
   const result = summarizeQuarter([record], {}, emptyReview(), 2026, 3);
   assert.ok(result.blockers.some((message) => /Apple.*Datum fehlt/i.test(message)));

@@ -154,6 +154,8 @@ export function summarizeQuarter(
       Number.isFinite(Number(review.appleExact)) &&
       review.appleEvidence.trim().length > 5;
     if (override) totals.appleZm = Number(review.appleExact);
+    if (!override && reports.some((r) => r.source === "apple_financial" && (r.missingAppleDates || 0) > 0))
+      blockers.push("Apple: Ein maßgebliches Datum fehlt. Quartalszuordnung anhand der Unterlagen klären oder eine bestätigte Quartalssumme mit Belegreferenz ergänzen.");
     if (
       !override &&
       selected.some(
