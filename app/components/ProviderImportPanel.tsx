@@ -355,7 +355,7 @@ export default function ProviderImportPanel({
       <details>
         <summary>Google Play Earnings</summary>
         <p>
-          Benötigt die Cloud-Storage-URI aus Play Console → Berichte herunterladen → Finanzen (laut Google normalerweise pubsite_prod_rev_…) und einen Service
+          Benötigt die Cloud-Storage-URI aus Play Console → Berichte herunterladen → Finanzen (der Bucket kann pubsite_prod_… oder pubsite_prod_rev_… heißen) und einen Service
           Account mit den globalen Berechtigungen „Finanzdaten einsehen“ und
           „App-Informationen ansehen“.{" "}
           <a

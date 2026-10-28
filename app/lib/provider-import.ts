@@ -295,12 +295,20 @@ export async function downloadGoogleReports(
       }
       pageToken = typeof listing.nextPageToken === "string" && listing.nextPageToken ? listing.nextPageToken : undefined;
     } while (pageToken);
-    selected = standard.filter((name) => found.has(name));
-    const additional = [...found].filter((name) => !standard.includes(name));
+    selected = [];
+    for (const expected of standard) {
+      const prefix = expected.slice(0, -4);
+      const ordinary = [...found].filter((name) => name === expected || (name.startsWith(`${prefix}_`) && /^\d+(?:-\d+)?\.zip$/.test(name.slice(prefix.length + 1)))).sort();
+      // Multiple reports for one month may overlap; require review.
+      if (ordinary.length > 1) {
+        warnings.push(`Google ${expected.split("/").pop()}: Mehrere mögliche Monatsberichte gefunden. Bitte vor dem Import prüfen, um Doppelzählungen zu vermeiden.`);
+      } else {
+        selected.push(...ordinary);
+        if (!ordinary.length) warnings.push(`Google ${expected.split("/").pop()}: Kein Monatsbericht im angegebenen Bucket gefunden.`);
+      }
+    }
+    const additional = [...found].filter((name) => !standard.some((expected) => name === expected || (name.startsWith(`${expected.slice(0, -4)}_`) && /^\d+(?:-\d+)?\.zip$/.test(name.slice(expected.length - 3)))));
     if (additional.length) warnings.push(`Google: ${additional.length} zusätzliche Berichtsdatei(en) gefunden. Bitte separat prüfen; sie werden nicht automatisch zur Steuerberechnung addiert.`);
-    for (const expected of standard)
-      if (!selected.includes(expected))
-        warnings.push(`Google ${expected.split("/").pop()}: Keine Datei für diesen Monat im angegebenen Bucket gefunden. Prüfe die Speicher-URI unter Finanzberichte in der Play Console.`);
   } catch (error) {
     checkCancelled(error, options.signal);
     warnings.push(`Google-Berichtsverzeichnis nicht lesbar (${reportError(error)}). Standarddateinamen werden direkt versucht; prüfe Finanz-Bucket und Berechtigung zum Auflisten der Objekte.`);
