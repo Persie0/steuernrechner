@@ -4,7 +4,14 @@ import Link from "next/link";
 import { parseExpenseJson } from "../lib/expense-json";
 import { useEffect, useMemo, useState } from "react";
 import { formatBytes, useUst, type UploadFeedback } from "./UstProvider";
-import { money, vatBalance, type ExpenseDraft } from "../lib/tax";
+import {
+  money,
+  openAiExpensesWithMissingPaymentDate,
+  vatBalance,
+  withExpenseTaxDate,
+  withPaymentDateMatchingTaxDate,
+  type ExpenseDraft,
+} from "../lib/tax";
 import { quarterDates } from "../lib/quarterly";
 import {
   reportQuarterHint,
@@ -32,6 +39,7 @@ const steps = ["Quartal", "Belege", "Ausgaben", "Prüfen", "UVA & ZM"];
 
 function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
   const { updateExpense, reports, downloadReport } = useUst();
+  const paymentMatchesTaxDate = !!expense.date && expense.paymentDate === expense.date;
   const change = (patch: Partial<ExpenseDraft>) =>
     updateExpense({
       ...expense,
@@ -82,7 +90,7 @@ function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
           <input
             type="date"
             value={expense.date}
-            onChange={(e) => change({ date: e.target.value })}
+            onChange={(e) => updateExpense(withExpenseTaxDate(expense, e.target.value))}
           />
         </label>
         <label>
@@ -93,14 +101,25 @@ function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
             onChange={(e) => change({ serviceDate: e.target.value })}
           />
         </label>
-        <label>
-          Bezahlt am
-          <input
-            type="date"
-            value={expense.paymentDate}
-            onChange={(e) => change({ paymentDate: e.target.value })}
-          />
-        </label>
+        <div>
+          <label>
+            Bezahlt am
+            <input
+              type="date"
+              value={expense.paymentDate}
+              onChange={(e) => change({ paymentDate: e.target.value })}
+            />
+          </label>
+          <label className="checkLine paymentSameDate">
+            <input
+              type="checkbox"
+              disabled={!expense.date}
+              checked={paymentMatchesTaxDate}
+              onChange={(e) => updateExpense(withPaymentDateMatchingTaxDate(expense, e.target.checked))}
+            />
+            Zahlungsdatum ist gleich Steuerdatum
+          </label>
+        </div>
         <label>
           Netto gesamt · EUR
           <input
@@ -284,6 +303,7 @@ export default function CalculationWizard() {
     () => summarizeReportQuarters(reports, expenseOverrides),
     [reports, expenseOverrides],
   );
+  const missingOpenAiPaymentDates = openAiExpensesWithMissingPaymentDate(expenses);
   const busy = uploadPending || apiBusy || importIsActive(importProgress);
   const visibleFeedback = busy
     ? importFeedback
@@ -663,6 +683,14 @@ export default function CalculationWizard() {
               {expenses.length} zugeordnete Ausgaben im Quartal. Noch ungeklärte
               USt-Fälle zählen zunächst mit 0 € und verhindern den Abschluss.
             </p>
+          )}
+          {missingOpenAiPaymentDates.length > 0 && (
+            <button className="secondaryBtn" onClick={() => {
+              for (const expense of missingOpenAiPaymentDates) updateExpense(expense);
+              setExpenseJsonMessage(`${missingOpenAiPaymentDates.length} fehlende OpenAI-Zahlungsdaten aus dem Steuerdatum übernommen. Bitte die betroffenen Ausgaben erneut prüfen.`);
+            }}>
+              Fehlende OpenAI-Zahlungsdaten wie Steuerdatum setzen ({missingOpenAiPaymentDates.length})
+            </button>
           )}
           {expenses.length > 0 && <button className="secondaryBtn danger" disabled={busy} onClick={() => {
             if (!window.confirm(`Alle ${expenses.length} Ausgaben in Q${quarter}/${year} löschen? Originaldateien und API-Zugänge bleiben erhalten.`)) return;
