@@ -81,13 +81,24 @@ export function prepareProviderRequest(payload: Payload): Upstream {
       },
     };
   }
+  if (kind === "google_list") {
+    fields(payload, ["kind", "bucket", "token", "pageToken"]);
+    const bucket = field(payload, "bucket", /^pubsite_prod_(?:rev_)?\d{4,32}$/);
+    const url = new URL(`https://storage.googleapis.com/storage/v1/b/${bucket}/o`);
+    url.searchParams.set("prefix", "earnings/earnings_");
+    url.searchParams.set("fields", "items(name),nextPageToken");
+    url.searchParams.set("maxResults", "1000");
+    if (payload.pageToken !== undefined)
+      url.searchParams.set("pageToken", field(payload, "pageToken", /^[A-Za-z0-9_+=\/-]+$/, 2048));
+    return { url: url.toString(), init: { headers: { Authorization: `Bearer ${secret(payload, "token")}` }, redirect: "error", cache: "no-store" } };
+  }
   if (kind === "google_file") {
     fields(payload, ["kind", "bucket", "token", "object"]);
     const bucket = field(payload, "bucket", /^pubsite_prod_(?:rev_)?\d{4,32}$/);
     const object = field(
       payload,
       "object",
-      /^earnings\/earnings_20\d{2}(0[1-9]|1[0-2])\.zip$/,
+      /^earnings\/earnings_20\d{2}(0[1-9]|1[0-2])(?:_[A-Za-z0-9_-]{1,100})?\.zip$/,
     );
     const url = new URL(
       `https://storage.googleapis.com/storage/v1/b/${bucket}/o/${encodeURIComponent(object)}`,

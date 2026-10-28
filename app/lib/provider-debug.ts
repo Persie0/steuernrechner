@@ -10,7 +10,7 @@ type DebugEntry = {
   hinweis?: string;
 };
 type RawFile = { path: string; bytes: Uint8Array };
-const reportKinds = new Set(["apple_finance", "apple_sales", "google_file", "appodeal_result"]);
+const reportKinds = new Set(["apple_finance", "apple_sales", "google_list", "google_file", "appodeal_result"]);
 const maxBytes = 100 * 1024 * 1024;
 
 export function createProviderDebug() {
@@ -44,11 +44,11 @@ export function createProviderDebug() {
       });
     },
     capture(payload: Payload, status: number | undefined, raw: Uint8Array | undefined, durationMs: number, note?: string) {
-      const kind = typeof payload.kind === "string" && /^(apple_finance|apple_sales|google_token|google_file|appodeal_start|appodeal_status|appodeal_result)$/.test(payload.kind)
+      const kind = typeof payload.kind === "string" && /^(apple_finance|apple_sales|google_token|google_list|google_file|appodeal_start|appodeal_status|appodeal_result)$/.test(payload.kind)
         ? payload.kind : "unbekannt";
       const selected = typeof payload.date === "string" && /^20\d{2}-\d{2}(?:-\d{2})?$/.test(payload.date)
         ? payload.date
-        : typeof payload.object === "string" && /^earnings\/earnings_20\d{4}\.zip$/.test(payload.object)
+        : typeof payload.object === "string" && /^earnings\/earnings_20\d{4}(?:_[A-Za-z0-9_-]{1,100})?\.zip$/.test(payload.object)
           ? payload.object.split("/").pop()
           : typeof payload.from === "string" && typeof payload.to === "string" && /^20\d{2}-\d{2}-\d{2}$/.test(payload.from) && /^20\d{2}-\d{2}-\d{2}$/.test(payload.to)
             ? `${payload.from} bis ${payload.to}` : undefined;
@@ -61,7 +61,7 @@ export function createProviderDebug() {
         else if (bytesStored + raw.byteLength > maxBytes)
           entry.hinweis = "Debug-Speicherlimit von 100 MB erreicht; Rohdatei nicht gespeichert.";
         else {
-          const suffix = kind === "google_file" ? ".zip" : kind === "appodeal_result" ? ".json" : raw[0] === 0x1f && raw[1] === 0x8b ? ".gz" : ".txt";
+          const suffix = kind === "google_file" ? ".zip" : kind === "appodeal_result" || kind === "google_list" ? ".json" : raw[0] === 0x1f && raw[1] === 0x8b ? ".gz" : ".txt";
           const name = selected?.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80) || "antwort";
           const path = `berichte/${String(events.length + 1).padStart(3, "0")}_${kind}_${name}${suffix}`;
           files.push({ path, bytes: raw });

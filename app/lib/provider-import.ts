@@ -135,7 +135,7 @@ async function relay(payload: Record<string, unknown>, options: ProviderOptions)
   }
   if (options.debug && !options.signal?.aborted) {
     let raw: Uint8Array | undefined, note: string | undefined;
-    if (response.ok && ["apple_finance", "apple_sales", "google_file", "appodeal_result"].includes(String(payload.kind))) {
+    if (response.ok && ["apple_finance", "apple_sales", "google_list", "google_file", "appodeal_result"].includes(String(payload.kind))) {
       try { raw = new Uint8Array(await response.clone().arrayBuffer()); }
       catch { note = "Rohantwort konnte für das Debug-ZIP nicht gelesen werden."; }
     }
@@ -274,9 +274,38 @@ export async function downloadGoogleReports(
   if (typeof auth.access_token !== "string")
     throw new Error("Google hat kein Zugriffstoken zurückgegeben.");
   const token: string = auth.access_token;
-  const selected = googleEarningsObjects(year, quarter);
-  const files: File[] = [],
-    warnings: string[] = [];
+  const standard = googleEarningsObjects(year, quarter);
+  const files: File[] = [], warnings: string[] = [];
+  let selected = standard;
+  try {
+    const found = new Set<string>();
+    let pageToken: string | undefined;
+    let pages = 0;
+    do {
+      options.signal?.throwIfAborted();
+      options.progress?.(`Google-Berichtsverzeichnis durchsuchen (Seite ${++pages}) …`);
+      if (pages > 20) throw new Error("Zu viele Seiten im Google-Berichtsverzeichnis.");
+      const response = await relay({ kind: "google_list", bucket: config.bucket, token, ...(pageToken ? { pageToken } : {}) }, options);
+      const listing = await response.json();
+      if (listing.items !== undefined && !Array.isArray(listing.items)) throw new Error("Ungültiges Google-Berichtsverzeichnis.");
+      for (const item of listing.items || []) {
+        const name = item?.name;
+        if (typeof name === "string" && /^earnings\/earnings_20\d{2}(0[1-9]|1[0-2])(?:_[A-Za-z0-9_-]{1,100})?\.zip$/.test(name) &&
+          standard.some((expected) => name.startsWith(expected.slice(0, -4)) && [".", "_"].includes(name[expected.length - 4]))) found.add(name);
+      }
+      pageToken = typeof listing.nextPageToken === "string" && listing.nextPageToken ? listing.nextPageToken : undefined;
+    } while (pageToken);
+    selected = standard.filter((name) => found.has(name));
+    const additional = [...found].filter((name) => !standard.includes(name));
+    if (additional.length) warnings.push(`Google: ${additional.length} zusätzliche Berichtsdatei(en) gefunden. Bitte separat prüfen; sie werden nicht automatisch zur Steuerberechnung addiert.`);
+    for (const expected of standard)
+      if (!selected.includes(expected))
+        warnings.push(`Google ${expected.split("/").pop()}: Keine Datei für diesen Monat im angegebenen Bucket gefunden. Prüfe die Speicher-URI unter Finanzberichte in der Play Console.`);
+  } catch (error) {
+    checkCancelled(error, options.signal);
+    warnings.push(`Google-Berichtsverzeichnis nicht lesbar (${reportError(error)}). Standarddateinamen werden direkt versucht; prüfe Finanz-Bucket und Berechtigung zum Auflisten der Objekte.`);
+    selected = standard;
+  }
   for (const object of selected) {
     options.signal?.throwIfAborted();
     options.progress?.(`Google ${object.split("/").pop()} abrufen …`);
