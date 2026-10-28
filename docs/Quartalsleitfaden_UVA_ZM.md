@@ -336,6 +336,34 @@ Regeln des aktuellen Importers:
 
 Quellen: [BMF: Datenstromübermittlung und Protokoll](https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/datenstromuebermittlung.html), [FinanzOnline: Test-/Produktionsübermittlung](https://finanzonline.bmf.gv.at/fon/a/hilfe.do?pageId=0e336bf61a539e4dabb76959fbb98137).
 
+### 12.4 Nach der Übermittlung: Erfolg kontrollieren und Unterlagen speichern
+
+**Vor der Produktion:** Ein Test prüft die technische Einbringung, ist aber keine tatsächliche Abgabe. Die UVA und die ZM sind unterschiedliche Erklärungsarten; jedes erzeugte und gesendete Datenpaket hat ein eigenes Protokoll. Die folgenden Schritte für beide einzeln durchführen.
+
+#### Wo sehe ich, ob die Erklärung wirklich eingebracht ist?
+
+1. Nach der **Produktionsübermittlung** bestätigt eine grüne Meldung zunächst, dass das XML gesendet bzw. übernommen wurde. Das ist noch nicht das Ergebnis der nachfolgenden Verarbeitung. Eine rote Meldung bedeutet einen formalen Fehler: die Datei wurde nicht übernommen. In beiden Fällen die Meldung aufmerksam lesen.
+2. In FinanzOnline oben **„Nachrichten“ → „Eingehend“** öffnen. In älteren Anleitungen wird dieser Nachrichtenbereich auch „DataBox“ genannt. Der Menütext kann sich mit der Oberfläche ändern.
+3. Die Nachrichten nach **Produktionsübermittlungsprotokoll** und Sendedatum durchsuchen und den Betreff anklicken. Die Verarbeitung erfolgt asynchron; wenn das Protokoll noch nicht da ist, später aktualisieren und erneut nachsehen. Bei ausbleibender Rückmeldung, besonders kurz vor Fristablauf, FinanzOnline-Hotline bzw. Finanzamt kontaktieren. Nicht ohne Prüfung einfach nochmals senden.
+4. Das Protokoll dem richtigen XML zuordnen: Übermittlungsdatum/-zeit, Übermittler und möglichst `PAKET_NR` im XML und im Protokoll vergleichen. Das XML kann als Textdatei geöffnet werden; die Paketnummer steht im Element `<PAKET_NR>`. Auch Erklärungstyp und Zeitraum anhand des übermittelten XML und der gegebenenfalls im Protokoll angezeigten Einzelsätze zuordnen. Die Steuernummer vertraulich behandeln.
+5. Auf den Inhalt achten: Bei **„PRODUKTIONS-Übermittlung … zur Gänze eingebracht“** wurde das betreffende Paket vollständig verarbeitet. Bei **„nicht eingebracht“** oder **„nicht (vollständig) eingebracht“** die Fehlertexte und Satznummern lesen. Wenn mehrere Sätze im Paket stehen, können fehlerfreie Sätze bereits eingebracht sein; nur nicht übernommene Sätze nach Korrektur erneut übermitteln. Nicht versehentlich bereits angenommene Erklärungen doppelt senden.
+6. Das zweite Produktionsprotokoll für die andere Erklärungsart genauso kontrollieren. Ein **TEST**-Protokoll – selbst ein positives – bestätigt keine Abgabe. „XML erfolgreich gesendet“ und „Produktion zur Gänze eingebracht“ sind ebenfalls nicht dasselbe.
+7. Die positive Verarbeitung bestätigt die Einbringung, aber nicht, dass die erklärte Rechnung oder Schätzung steuerlich vollständig und richtig ist. Bei einer später erkannten ursprünglichen Unrichtigkeit die Berichtigung für den ursprünglichen Zeitraum prüfen; bei einer ZM die korrigierte Gesamtmeldung übermitteln (Abschnitt 13).
+
+Unter **„Nachrichten → Ausgehend“** lassen sich laut FinanzOnline-Hilfe übermittelte Anträge/Erklärungen ebenfalls ansehen und gegebenenfalls öffnen und speichern. Für die erfolgreiche Datenstrom-Einbringung bleibt das passende positive **eingehende Produktionsprotokoll** maßgeblich. Eine Anzeige unter „Ausgehend“ oder eine Testnachricht ist kein Ersatz dafür.
+
+#### Was und wo herunterladen?
+
+1. Das gefundene Protokoll in **Eingehend** über seinen **Betreff** öffnen. Die angezeigte Nachricht mit der angebotenen Speichern-/Downloadfunktion sichern; wenn die Ansicht nur Druck unterstützt, die Druckfunktion des Browsers und **„Als PDF speichern“** nutzen. Den verfügbaren Originalinhalt bevorzugen; eine browsererzeugte PDF-Kopie als solche behandeln.
+2. Alternativ bietet die Nachrichtenansicht die Schaltfläche **„ZIP-Datei erstellen“** für Nachrichten-Inhalte. Die ZIP-Datei herunterladen, entpacken und kontrollieren, ob die beiden richtigen Produktionsprotokolle tatsächlich enthalten und lesbar sind. Die ZIP kann weitere vertrauliche Nachrichten enthalten.
+3. Die **genau verwendete UVA-XML und ZM-XML** bereits beim Export aus der Website oder nach dem Herunterladen aus dem Chat im eigenen Quartalsordner aufbewahren. Die ursprünglichen Dateien nicht nachträglich überschreiben. FinanzOnline-„Ausgehend“ kann eine weitere lesbare Kopie bieten; nicht voraussetzen, dass dort immer die ursprüngliche XML-Datei verfügbar ist.
+4. Außerdem auf der Website den **Prüfbericht CSV** sowie **„Originale + Quartalsstand als ZIP“** herunterladen. Die Website-Sicherung ist ein eigener Datenstand und **kein** FinanzOnline-Übermittlungsprotokoll.
+5. Praktische Ablage, etwa `2026/Q3/FinanzOnline/`: UVA-XML, UVA-Produktionsprotokoll, ZM-XML, ZM-Produktionsprotokoll, Prüfbericht, Quartalsbackup und gegebenenfalls Zahlungsnachweis. Korrekturen später zusätzlich mit Datum, neuer XML und neuem Protokoll ablegen. Kein API-Schlüssel in diese Dateien aufnehmen.
+6. Dokumente zeitnah sichern: FinanzOnline führt für **gelesene Produktionsübermittlungsprotokolle eine automatische Löschung nach 31 Tagen ab Auslesen** an; ungelesene Produktionsprotokolle werden nach sechs Monaten entfernt. Testprotokolle haben eigene kürzere Aufbewahrungszeiten. Die Zustellhistorie kann nach der Löschung Informationen über eine Nachricht zeigen, ist aber kein verlässlicher Ersatz für die gesicherte Nachricht.
+7. Wenn die UVA eine Zahlung ergibt, das **Steuerkonto / die Buchungen** in FinanzOnline und gegebenenfalls die eigene Zahlungsbestätigung zusätzlich prüfen. Die ZM-Summe ist keine zu bezahlende Steuer. Eine Einreichungsbestätigung allein ist kein Zahlungsnachweis.
+
+Quellen: [BMF: Datenstrom und Protokoll](https://www.bmf.gv.at/services/finanzonline/informationen-fuer-softwarehersteller/datenstromuebermittlung.html), [FinanzOnline: Nachrichten und Speichern](https://finanzonline.bmf.gv.at/fon/a/hilfe.do?pageId=e82eb4ed20057c44857edc791e9d743d), [FinanzOnline: ZIP-Datei erstellen und Löschfristen](https://finanzonline.bmf.gv.at/fon/a/hilfe.do?pageId=ff0bb4b915826fff43236fac6f8cac9e), [BMF: mögliche Protokolltexte](https://www.bmf.gv.at/dam/jcr%3A204076c5-2d07-4ebe-88a6-88d2a6cfd4bd/BMF_Allgemeines_Protokolle.pdf), [FinanzOnline: Steuerkonto](https://finanzonline.bmf.gv.at/fon/a/hilfe.do?pageId=f759be715a440dc938d4ece6ed58ef6c).
+
 ## 13. Was tun, wenn nach der Abgabe neue Berichte kommen?
 
 ### 13.1 ZM – ursprünglicher Fehler oder fehlender Umsatz
