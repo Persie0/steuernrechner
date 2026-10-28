@@ -254,7 +254,12 @@ export default function ProviderImportPanel({
       className="providerPanel"
       aria-label="Automatischer Plattformabruf"
     >
-      <h3>Berichte automatisch abrufen</h3>
+      <h3>Apple und Google abrufen</h3>
+      <button type="button" className="uploadBtn" disabled={locked} onClick={() => {
+        const selected = configuredProviders(credentials).filter((provider) => provider === "apple" || provider === "google");
+        if (selected.length !== 2) { setMessage("Bitte zuerst vollständige Zugänge für Apple und Google eingeben. Einzelabruf ist unten möglich."); return; }
+        void run(selected, credentials);
+      }}>Apple und Google für Q{quarter}/{year} abrufen</button>
       <p>
         Gespeicherte Zugänge werden beim Öffnen dieses Schritts für das gewählte
         Quartal automatisch abgerufen. Beim manuellen Abruf wird der jeweilige

@@ -6,27 +6,10 @@ import { StoredNotice, useUst } from "./UstProvider";
 import { useBooks } from "./BookkeepingProvider";
 
 const workflow = [
-  { href: "/berechnung", label: "Quartalsdurchlauf" },
+  { href: "/", label: "Quartalsdurchlauf" },
   { href: "/finanzonline", label: "UVA/ZM · Abgabe" },
   { href: "/breakdown", label: "Berechnungsdetails" },
   { href: "/einstellungen", label: "Einstellungen & Backup" },
-];
-const bookkeeping = [
-  { href: "/", label: "Jahresübersicht" },
-  { href: "/kontakte", label: "Kunden & Lieferanten" },
-  { href: "/produkte", label: "Produkte & Leistungen" },
-  { href: "/dokumente", label: "Dokumente & Zahlungen" },
-  { href: "/buchungen", label: "Buchungen" },
-  { href: "/ki-import", label: "Gemini Belegimport" },
-
-  { href: "/steuer", label: "Steuer-Auswertung" },
-  { href: "/jahresabschluss", label: "Jahresabschluss" },
-];
-const knowledge = [
-  { href: "/lernen", label: "Steuer-Grundlagen" },
-  { href: "/google", label: "Google-Import" },
-  { href: "/apple", label: "Apple-Import" },
-  { href: "/appodeal", label: "Appodeal-Import" },
 ];
 
 export default function Shell({ children }: { children: React.ReactNode }) {
@@ -78,14 +61,6 @@ export default function Shell({ children }: { children: React.ReactNode }) {
           <div className="navGroup">
             <p>DEINE QUARTALSMELDUNG</p>
             {workflow.map(navLink)}
-            <details>
-              <summary>Weitere Buchhaltung</summary>
-              {bookkeeping.map(navLink)}
-            </details>
-          </div>
-          <div className="navGroup knowledgeGroup">
-            <p>WISSEN & IMPORT-HILFE</p>
-            {knowledge.map(navLink)}
           </div>
           <div className="localBox">
             <b>Lokal gespeichert</b>

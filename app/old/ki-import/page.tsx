@@ -9,8 +9,8 @@ import {
   categories,
   useBooks,
   vatCaseLabels,
-} from "../components/BookkeepingProvider";
-import {saveReceipt} from "../lib/receipts";
+} from "../../components/BookkeepingProvider";
+import {saveReceipt} from "../../lib/receipts";
 
 const GEMINI_KEY_STORAGE = "steuernrechner-gemini-key-v1";
 

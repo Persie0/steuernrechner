@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useBooks } from "../components/BookkeepingProvider";
-import { useUst } from "../components/UstProvider";
-import { money } from "../lib/tax";
+import { useBooks } from "../../components/BookkeepingProvider";
+import { useUst } from "../../components/UstProvider";
+import { money } from "../../lib/tax";
 
 export default function Steuer() {
   const {

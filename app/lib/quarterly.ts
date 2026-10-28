@@ -22,6 +22,7 @@ export type QuarterReview = {
   reviewed: boolean;
   submittedUva: boolean;
   submittedZm: boolean;
+  submittedZmSnapshot?: { uid: string; name: string; exact: number }[];
 };
 export const emptyReview = (): QuarterReview => ({
   google: true,
@@ -74,6 +75,19 @@ export function summarizeQuarter(
         )
       : r.year === year && r.month !== null && months.includes(r.month),
   );
+  // Different versions of the same platform period can overlap. Never silently
+  // treat both as additive: require the user to remove the obsolete version.
+  const periods = new Map<string, StoredReport>();
+  for (const report of selected) {
+    if (report.source !== "google" && report.source !== "apple_financial") continue;
+    const period = report.source === "apple_financial" && report.periodStart && report.periodEnd
+      ? `${report.periodStart}/${report.periodEnd}` : `${report.year}-${report.month}`;
+    const key = `${report.source}:${period}`;
+    const prior = periods.get(key);
+    if (prior && prior.sha256 !== report.sha256)
+      blockers.push(`Mehrere unterschiedliche ${report.source === "google" ? "Google" : "Apple"}-Berichte für ${period}: ältere Version prüfen und entfernen, um Doppelzählungen zu vermeiden.`);
+    else periods.set(key, report);
+  }
   const seen = new Set<string>();
   for (const report of reports) {
     if (report.sha256 && seen.has(report.sha256)) continue;

@@ -1,8 +1,8 @@
 "use client";
 
 import {useEffect, useMemo, useState} from "react";
-import {categories, csvDownload, useBooks} from "../components/BookkeepingProvider";
-import {money} from "../lib/tax";
+import {categories, csvDownload, useBooks} from "../../components/BookkeepingProvider";
+import {money} from "../../lib/tax";
 
 const official = {
   ea: "https://www.usp.gv.at/themen/steuern-finanzen/steuerliche-gewinnermittlung/einnahmen-ausgaben-rechnung.html",

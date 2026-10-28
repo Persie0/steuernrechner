@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
 import {FormEvent,useMemo,useState} from "react";
-import {BusinessDocument,DocumentLine,DocumentType,VatCase,useBooks,vatCaseLabels} from "../components/BookkeepingProvider";
-import {money} from "../lib/tax";
+import {BusinessDocument,DocumentLine,DocumentType,VatCase,useBooks,vatCaseLabels} from "../../components/BookkeepingProvider";
+import {money} from "../../lib/tax";
 const today=new Date().toISOString().slice(0,10);
 const newLine=():DocumentLine=>({id:globalThis.crypto?.randomUUID?.()||`line-${Date.now()}-${Math.random().toString(36).slice(2)}`,productId:"",description:"",quantity:1,unit:"Stk.",unitPrice:0,vatRate:20,discount:0});
 const typeNames:Record<DocumentType,string>={offer:"Angebot",order:"Auftragsbestätigung",delivery:"Lieferschein",invoice:"Rechnung",credit_note:"Gutschrift",cancellation:"Stornorechnung"};
