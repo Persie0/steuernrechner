@@ -27,6 +27,7 @@ import {
   quarterDates,
   mergeExpenses,
   expenseAffectedPeriods,
+  expenseRelevantInPeriod,
   type QuarterReview,
 } from "../lib/quarterly";
 
@@ -64,6 +65,7 @@ type Ctx = Store & {
   updateExpense: (expense: ExpenseDraft) => void;
   deleteQuarterExpenses: () => Promise<void>;
   filingBlockers: string[];
+  quarterNotes: string[];
   setYear: (n: number) => void;
   setQuarter: (n: number) => void;
   setTax: (s: string) => void;
@@ -638,7 +640,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
     await migrationPromise.current;
     await importQueue.current;
     const { from, to } = quarterDates(s.year, s.quarter);
-    const ids = new Set(mergeExpenses(s.reports, s.expenseOverrides).filter((e) => e.date >= from && e.date <= to).map((e) => e.id));
+    const ids = new Set(mergeExpenses(s.reports, s.expenseOverrides).filter((e) => expenseRelevantInPeriod(e, from, to)).map((e) => e.id));
     const changed = s.reports.filter((r) => r.expenses?.some((e) => ids.has(e.id)));
     for (const report of changed) {
       const stored = await getFile(report.id);
@@ -719,6 +721,7 @@ export function UstProvider({ children }: { children: React.ReactNode }) {
         setReview,
         expenses: result.expenses,
         filingBlockers,
+        quarterNotes: result.notes,
         warnings: [
           ...new Set([
             ...result.blockers,
