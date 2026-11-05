@@ -7,6 +7,7 @@ import { formatBytes, useUst, type UploadFeedback } from "./UstProvider";
 import {
   money,
   openAiExpensesWithMissingPaymentDate,
+  newManualExpense,
   vatBalance,
 } from "../lib/tax";
 import { quarterDates } from "../lib/quarterly";
@@ -162,23 +163,7 @@ export default function CalculationWizard() {
     }
   }
   function addExpense() {
-    const id = crypto.randomUUID();
-    updateExpense({
-      id,
-      title: "Weitere Ausgabe",
-      date: from,
-      // Manual entries default to paid on invoice date; imported invoices keep
-      // their documented payment state and must never be auto-marked paid.
-      paymentDate: from,
-      serviceDate: from,
-      net: 0,
-      vat: 0,
-      share: 100,
-      vatCase: "review",
-      confirmed: false,
-      sourceName: "Manuell",
-      note: "",
-    });
+    updateExpense(newManualExpense(crypto.randomUUID(), from));
   }
   return (
     <>
