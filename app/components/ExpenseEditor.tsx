@@ -1,11 +1,13 @@
 "use client";
 
 import { useUst } from "./UstProvider";
-import { withExpenseTaxDate, withPaymentDateMatchingTaxDate, type ExpenseDraft } from "../lib/tax";
+import { domesticVatIssues, roundCent, withExpenseTaxDate, withPaymentDateMatchingTaxDate, type ExpenseDraft } from "../lib/tax";
 
 export default function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
   const { updateExpense, reports, downloadReport } = useUst();
-  const paymentMatchesTaxDate = !!expense.date && expense.paymentDate === expense.date;
+  const isPartial = expense.payments !== undefined;
+  const paymentMatchesTaxDate = !isPartial && !!expense.date && expense.paymentDate === expense.date;
+  const paymentIssues = domesticVatIssues(expense);
   const change = (patch: Partial<ExpenseDraft>) =>
     updateExpense({
       ...expense,
@@ -52,7 +54,7 @@ export default function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
       </label>
       <div className="expenseFields">
         <label>
-          Steuerdatum
+          Rechnungs-/Steuerdatum
           <input
             type="date"
             value={expense.date}
@@ -60,31 +62,70 @@ export default function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
           />
         </label>
         <label>
-          Leistungsende
+          Leistungsende (falls bekannt)
           <input
             type="date"
             value={expense.serviceDate}
             onChange={(e) => change({ serviceDate: e.target.value })}
           />
         </label>
-        <div>
-          <label>
-            Bezahlt am
-            <input
-              type="date"
-              value={expense.paymentDate}
-              onChange={(e) => change({ paymentDate: e.target.value })}
-            />
+        <div className="paymentSchedule">
+          {expense.vatCase === "domestic" && (
+            <>
+              <label>
+                Rechnung erhalten am (falls später)
+                <input type="date" value={expense.invoiceReceivedDate || ""}
+                  onChange={(event) => change({ invoiceReceivedDate: event.target.value })} />
+              </label>
+              <label className="checkLine">
+                <input type="checkbox" checked={!!expense.prepayment}
+                  onChange={(event) => change({ prepayment: event.target.checked })} />
+                Anzahlung mit gültiger Anzahlungsrechnung (vor Leistungsende)
+              </label>
+            </>
+          )}
+          <label className="checkLine">
+            <input type="checkbox" checked={isPartial}
+              onChange={(event) => change(event.target.checked
+                ? { payments: [{ date: expense.paymentDate || expense.date, gross: 0 }], paymentDate: "" }
+                : { payments: undefined, paymentDate: "" })} />
+            Teilzahlungen einzeln erfassen
           </label>
-          <label className="checkLine paymentSameDate">
-            <input
-              type="checkbox"
-              disabled={!expense.date}
-              checked={paymentMatchesTaxDate}
-              onChange={(e) => updateExpense(withPaymentDateMatchingTaxDate(expense, e.target.checked))}
-            />
-            Zahlungsdatum ist gleich Steuerdatum
-          </label>
+          {isPartial ? (
+            <>
+              {(expense.payments || []).map((payment, index) => (
+                <div key={index} className="paymentInstallment">
+                  <label>Bezahlt am
+                    <input type="date" value={payment.date}
+                      onChange={(event) => change({ payments: expense.payments!.map((item, i) => i === index ? { ...item, date: event.target.value } : item) })} />
+                  </label>
+                  <label>Gezahlt brutto · EUR
+                    <input type="number" min="0" step="0.01" value={payment.gross}
+                      onChange={(event) => change({ payments: expense.payments!.map((item, i) => i === index ? { ...item, gross: Number(event.target.value) } : item) })} />
+                  </label>
+                  <button type="button" className="secondaryBtn"
+                    onClick={() => change({ payments: expense.payments!.filter((_, i) => i !== index) })}>Entfernen</button>
+                </div>
+              ))}
+              <button type="button" className="secondaryBtn"
+                onClick={() => change({ payments: [...(expense.payments || []), { date: expense.date, gross: 0 }] })}>
+                Weitere Teilzahlung
+              </button>
+              <small>Rechnungsbrutto: {roundCent(expense.net + expense.vat).toFixed(2)} EUR. Nur tatsächlich bezahlte Beträge eintragen.</small>
+            </>
+          ) : (
+            <>
+              <label>Bezahlt am (vollständig)
+                <input type="date" value={expense.paymentDate}
+                  onChange={(event) => change({ paymentDate: event.target.value })} />
+              </label>
+              <label className="checkLine paymentSameDate">
+                <input type="checkbox" disabled={!expense.date} checked={paymentMatchesTaxDate}
+                  onChange={(event) => updateExpense(withPaymentDateMatchingTaxDate(expense, event.target.checked))} />
+                Zahlungsdatum = Rechnungs-/Steuerdatum
+              </label>
+            </>
+          )}
         </div>
         <label>
           Netto gesamt · EUR
@@ -147,12 +188,20 @@ export default function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
         />
       </label>
       <p className="hint">
-        Bei RC zählt grundsätzlich das Leistungsende, bei bezahlter
-        Vorauszahlung der frühere Zahlungstermin. Bei gewöhnlicher
-        Einkaufs-Vorsteuer müssen Rechnung und Zahlung vorliegen. Steuerdatum
-        entsprechend setzen. Bereits reduzierte Kalkül-Buchungsbeträge werden
-        nicht nochmals gekürzt.
+        Für KZ 060 werden Rechnung, tatsächlicher Rechnungseingang,
+        gegebenenfalls Leistungsende und bezahlter Betrag berücksichtigt.
+        Eine manuelle Ausgabe wird mit identischem Rechnungs- und Zahlungsdatum
+        angelegt: vor der Bestätigung bitte prüfen, ob tatsächlich bezahlt wurde.
+        Bei Teilzahlungen wird die Vorsteuer anteilig den Zahlungsquartalen
+        zugeordnet. Eine Anzahlung vor Leistungsende benötigt einen gültigen
+        Anzahlungsbeleg. Reverse Charge verwendet weiterhin das Steuerdatum.
+        Bereits reduzierte Kalkül-Buchungsbeträge werden nicht nochmals gekürzt.
       </p>
+      {paymentIssues.length > 0 && (
+        <ul className="hint" role="alert">
+          {paymentIssues.map((issue) => <li key={issue}>{issue}</li>)}
+        </ul>
+      )}
       <label className="checkLine">
         <input
           type="checkbox"
@@ -160,14 +209,15 @@ export default function ExpenseEditor({ expense }: { expense: ExpenseDraft }) {
             expense.excluded ||
             expense.vatCase === "review" ||
             !expense.date ||
-            expense.net <= 0
+            expense.net <= 0 ||
+            paymentIssues.length > 0
           }
           checked={expense.confirmed}
           onChange={(e) =>
             updateExpense({ ...expense, confirmed: e.target.checked })
           }
         />{" "}
-        Betrag, Steuerdatum, USt-Fall und Betriebsanteil mit dem Beleg geprüft
+        Rechnung, Zahlung(en), Steuerdatum, USt-Fall und Betriebsanteil mit dem Beleg geprüft
       </label>
     </article>
   );

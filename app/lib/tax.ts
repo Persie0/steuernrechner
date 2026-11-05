@@ -415,6 +415,12 @@ export type ExpenseDraft = {
   attachmentId?: string;
   date: string;
   paymentDate: string;
+  /** Optional gross partial payments, replacing the single full-payment date. */
+  payments?: { date: string; gross: number }[];
+  /** Date when the invoice was actually received, if later than its issue date. */
+  invoiceReceivedDate?: string;
+  /** An advance payment supported by a valid advance-payment invoice. */
+  prepayment?: boolean;
   serviceDate: string;
   net: number;
   vat: number;
@@ -425,8 +431,18 @@ export type ExpenseDraft = {
   excluded?: boolean;
   note: string;
 };
+/** Manually added expenses start with equal invoice and payment dates by default.
+ * This is an editable convenience, never proof of payment or an import rule. */
+export function newManualExpense(id: string, date: string): ExpenseDraft {
+  return {
+    id, title: "Weitere Ausgabe", sourceName: "Manuell",
+    date, paymentDate: date, serviceDate: date,
+    net: 0, vat: 0, share: 100, vatCase: "review",
+    confirmed: false, note: "",
+  };
+}
 export function withPaymentDateMatchingTaxDate(expense: ExpenseDraft, matches: boolean): ExpenseDraft {
-  return { ...expense, paymentDate: matches ? expense.date : "", confirmed: false };
+  return { ...expense, payments: undefined, paymentDate: matches ? expense.date : "", confirmed: false };
 }
 export function withExpenseTaxDate(expense: ExpenseDraft, date: string): ExpenseDraft {
   const paymentMatches = !!expense.date && expense.paymentDate === expense.date;
@@ -447,13 +463,84 @@ export function expenseKey(title: string, date: string, net: number) {
         : title.toLowerCase().replace(/[^a-z0-9]/g, "");
   return `${supplier}:${date}:${roundCent(net)}`;
 }
+export type DomesticVatAllocation = { date: string; vat: number };
+const validTaxDate = (date: string) =>
+  /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(date) &&
+  !Number.isNaN(Date.parse(date)) &&
+  new Date(date).toISOString().slice(0, 10) === date;
+
+/**
+ * Return missing or invalid evidence as blockers rather than silently
+ * deducting the entire VAT when a payment is incomplete.
+ */
+export function domesticVatIssues(expense: ExpenseDraft): string[] {
+  if (expense.vatCase !== "domestic" || expense.excluded) return [];
+  const issues: string[] = [];
+  if (!validTaxDate(expense.date)) issues.push("Rechnungs-/Steuerdatum fehlt oder ist ungültig.");
+  if (expense.invoiceReceivedDate && !validTaxDate(expense.invoiceReceivedDate))
+    issues.push("Datum des Rechnungseingangs ist ungültig.");
+  if (expense.serviceDate && !validTaxDate(expense.serviceDate))
+    issues.push("Leistungsende ist ungültig.");
+  const gross = roundCent(expense.net + expense.vat);
+  if (!Number.isFinite(gross) || gross <= 0 || expense.vat < 0)
+    issues.push("Rechnungsbetrag ist für den Vorsteuerabzug ungültig.");
+  if (expense.payments !== undefined) {
+    if (!expense.payments.length) issues.push("Mindestens eine Teilzahlung mit Datum und Bruttobetrag erfassen.");
+    for (const payment of expense.payments)
+      if (!validTaxDate(payment.date) || !Number.isFinite(payment.gross) || payment.gross <= 0)
+        issues.push("Teilzahlung benötigt ein gültiges Datum und einen positiven Bruttobetrag.");
+    if (expense.payments.reduce((sum, payment) => sum + payment.gross, 0) > gross + 0.01)
+      issues.push("Teilzahlungen übersteigen den Bruttorechnungsbetrag.");
+  } else if (!validTaxDate(expense.paymentDate)) {
+    issues.push("Zahlungsdatum für Vorsteuer fehlt oder ist ungültig.");
+  }
+  return issues;
+}
+
+/**
+ * Allocate domestic input VAT to the quarter when BOTH invoice and payment
+ * conditions have been met. For installments, the invoice VAT is prorated by
+ * actually paid gross amounts and rounded cumulatively to avoid cent drift.
+ *
+ * "date" means invoice/tax date for domestic expenses. Later receipt of the
+ * invoice and a known later service completion are accounted for, except where
+ * a valid advance-payment invoice qualifies. The user must verify evidence.
+ */
+export function domesticVatAllocations(expense: ExpenseDraft): DomesticVatAllocation[] {
+  if (expense.vatCase !== "domestic" || expense.excluded || domesticVatIssues(expense).length) return [];
+  const gross = roundCent(expense.net + expense.vat);
+  const tax = roundCent(expense.vat * expense.share / 100);
+  const invoiceReady = [
+    expense.date,
+    expense.invoiceReceivedDate || expense.date,
+    expense.prepayment ? "" : expense.serviceDate,
+  ].filter(Boolean).sort().at(-1)!;
+  const payments = expense.payments === undefined
+    ? [{ date: expense.paymentDate, gross }]
+    : expense.payments;
+  let cumulativeGross = 0;
+  let cumulativeVat = 0;
+  return [...payments].sort((a, b) => a.date.localeCompare(b.date)).map((payment) => {
+    cumulativeGross += payment.gross;
+    const nextVat = roundCent(tax * Math.min(1, cumulativeGross / gross));
+    const allocation = { date: payment.date > invoiceReady ? payment.date : invoiceReady, vat: roundCent(nextVat - cumulativeVat) };
+    cumulativeVat = nextVat;
+    return allocation;
+  });
+}
+
+/** Legacy one-payment helper; partial-payment expenses can span quarters. */
+export function vatPeriodDate(expense: ExpenseDraft): string {
+  const allocations = domesticVatAllocations(expense);
+  return allocations[0]?.date || expense.date;
+}
 export function expenseContribution(expense: ExpenseDraft): Contribution {
   const out = { ...ZERO };
   if (expense.excluded) return out;
   const business =
     expense.businessNet ?? roundCent((expense.net * expense.share) / 100);
-  if (expense.vatCase === "domestic" && expense.paymentDate)
-    out.kz060 = (expense.vat * expense.share) / 100;
+  if (expense.vatCase === "domestic")
+    out.kz060 = domesticVatAllocations(expense).reduce((sum, item) => sum + item.vat, 0);
   if (expense.vatCase === "reverse_charge") {
     out.kz057 = expense.net * 0.2;
     out.kz066 = business * 0.2;

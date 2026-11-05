@@ -4,6 +4,8 @@ import {
   periodKey,
   reportContribution,
   roundCent,
+  domesticVatAllocations,
+  domesticVatIssues,
   type Contribution,
   type ExpenseDraft,
   type Source,
@@ -57,8 +59,15 @@ export function mergeExpenses(
   for (const expense of Object.values(overrides)) map.set(expense.id, expense);
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
+export function expenseRelevantInPeriod(expense: ExpenseDraft, from: string, to: string): boolean {
+  return (expense.date >= from && expense.date <= to) ||
+    domesticVatAllocations(expense).some((payment) => payment.date >= from && payment.date <= to);
+}
 export function expenseAffectedPeriods(previous: ExpenseDraft | undefined, next: ExpenseDraft): string[] {
-  return [...new Set([previous?.date, next.date].flatMap((date) => {
+  const dates = [previous, next].flatMap((expense) => expense
+    ? [expense.date, ...domesticVatAllocations(expense).map((payment) => payment.date)]
+    : []);
+  return [...new Set(dates.flatMap((date) => {
     if (!date || !/^\d{4}-(0[1-9]|1[0-2])-\d{2}$/.test(date)) return [];
     return [periodKey(Number(date.slice(0, 4)), Math.ceil(Number(date.slice(5, 7)) / 3))];
   }))];
@@ -210,20 +219,35 @@ export function summarizeQuarter(
   for (const key of Object.keys(ZERO) as (keyof Contribution)[])
     totals[key] = roundCent(totals[key]);
   const expenseTotals: Contribution = { ...ZERO };
+  const notes: string[] = [];
+  const inQuarter = (date: string) => date >= from && date <= to;
   const expenses = mergeExpenses(reports, overrides).filter(
-    (e) => e.date >= from && e.date <= to,
+    (expense) => expenseRelevantInPeriod(expense, from, to),
   );
-  for (const e of expenses) {
-    if (e.excluded) continue;
-    const c = expenseContribution(e);
-    for (const key of Object.keys(ZERO) as (keyof Contribution)[])
-      expenseTotals[key] += c[key];
-    if (!e.confirmed || e.vatCase === "review")
-      blockers.push(
-        `${e.title}: USt-Fall, Steuerdatum, Betrag und Betriebsanteil noch offen.`,
-      );
-    if (e.vatCase === "domestic" && !e.paymentDate)
-      blockers.push(`${e.title}: Zahlungsdatum für Vorsteuer fehlt.`);
+  for (const expense of expenses) {
+    if (expense.excluded) continue;
+    if (expense.vatCase === "domestic") {
+      const allocations = domesticVatAllocations(expense);
+      // An invoice can be listed in both the invoice quarter and later payment quarters,
+      // but each portion of its input VAT contributes to exactly one quarter.
+      for (const payment of allocations)
+        if (inQuarter(payment.date)) expenseTotals.kz060 += payment.vat;
+      if (inQuarter(expense.date) && allocations.some((payment) => !inQuarter(payment.date)))
+        notes.push(`${expense.title}: Vorsteuer aus Rechnung vom ${expense.date} wird (teilweise) erst in späteren Zahlungsquartalen berücksichtigt.`);
+      if (!inQuarter(expense.date) && allocations.some((payment) => inQuarter(payment.date)))
+        notes.push(`${expense.title}: Vorsteuer aus Rechnung vom ${expense.date} wird in Q${quarter}/${year} berücksichtigt.`);
+      const issues = domesticVatIssues(expense);
+      if (inQuarter(expense.date)) for (const issue of issues)
+        blockers.push(`${expense.title}: ${issue}`);
+      // Only require the review once in the source quarter; payment quarters
+      // also require their own re-review when payment data changes.
+    } else if (inQuarter(expense.date)) {
+      const contribution = expenseContribution(expense);
+      for (const key of Object.keys(ZERO) as (keyof Contribution)[])
+        expenseTotals[key] += contribution[key];
+    }
+    if (!expense.confirmed || expense.vatCase === "review")
+      blockers.push(`${expense.title}: USt-Fall, Steuerdatum, Betrag und Betriebsanteil noch offen.`);
   }
   for (const key of Object.keys(ZERO) as (keyof Contribution)[])
     totals[key] += roundCent(expenseTotals[key]);
@@ -318,6 +342,7 @@ export function summarizeQuarter(
     expenses,
     selected,
     blockers: [...new Set(blockers)],
+    notes: [...new Set(notes)],
     key: periodKey(year, quarter),
   };
 }

@@ -8,11 +8,19 @@ import {
   vatBalance,
   reportContribution,
   isoDate,
+  domesticVatAllocations,
+  domesticVatIssues,
+  newManualExpense,
+  withExpenseTaxDate,
+  withPaymentDateMatchingTaxDate,
+  type ExpenseDraft,
 } from "../app/lib/tax.ts";
 import {
   emptyReview,
   summarizeQuarter,
   mergeExpenses,
+  expenseAffectedPeriods,
+  expenseRelevantInPeriod,
 } from "../app/lib/quarterly.ts";
 
 test("Google resale margin is not an additional imported service fee", async () => {
@@ -195,4 +203,107 @@ test("Apple sales without transaction dates stay blocked until their quarter is 
   assert.match(record.message, /Datum fehlt/i);
   const result = summarizeQuarter([record], {}, emptyReview(), 2026, 3);
   assert.ok(result.blockers.some((message) => /Apple.*Datum fehlt/i.test(message)));
+});
+
+// --- Domestic KZ 060: invoice + payment, with explicit partial payments ---
+const vatExpense = (patch: Partial<ExpenseDraft> = {}): ExpenseDraft => ({
+  id: "receipt-1", title: "Laptop", sourceName: "laptop.pdf",
+  date: "2026-06-20", paymentDate: "2026-07-05", serviceDate: "2026-06-20",
+  net: 1000, vat: 200, share: 100, vatCase: "domestic",
+  confirmed: true, note: "", ...patch,
+});
+const expenseQuarter = (expense: ExpenseDraft, quarter: number) =>
+  summarizeQuarter([], { [expense.id]: expense },
+    { ...emptyReview(), google: false, apple: false, appodeal: false, expenses: "yes", expensesComplete: true },
+    2026, quarter);
+
+test("manually added invoices default to the same date for payment, but are unconfirmed", () => {
+  const expense = newManualExpense("manual-1", "2026-06-20");
+  assert.equal(expense.paymentDate, expense.date);
+  assert.equal(expense.confirmed, false);
+  assert.equal(withExpenseTaxDate(expense, "2026-07-01").paymentDate, "2026-07-01");
+  assert.equal(withPaymentDateMatchingTaxDate(expense, false).paymentDate, "");
+  assert.equal(withExpenseTaxDate({ ...expense, paymentDate: "2026-06-28" }, "2026-07-01").paymentDate, "2026-06-28");
+});
+
+test("domestic invoice in Q2 paid completely in Q3 has KZ 060 only in Q3", () => {
+  const expense = vatExpense();
+  const q2 = expenseQuarter(expense, 2), q3 = expenseQuarter(expense, 3);
+  assert.equal(q2.totals.kz060, 0);
+  assert.equal(q3.totals.kz060, 200);
+  assert.ok(q2.notes.some((n) => /späteren Zahlungsquartalen/.test(n)));
+  assert.ok(q3.notes.some((n) => /Rechnung vom/.test(n)));
+  assert.deepEqual(expenseAffectedPeriods(undefined, expense).sort(), ["2026-Q2", "2026-Q3"]);
+});
+
+test("a later receipt of the invoice delays domestic input VAT", () => {
+  const expense = vatExpense({ paymentDate: "2026-06-20", invoiceReceivedDate: "2026-07-03" });
+  assert.equal(expenseQuarter(expense, 2).totals.kz060, 0);
+  assert.equal(expenseQuarter(expense, 3).totals.kz060, 200);
+});
+
+test("later completion delays ordinary VAT, while qualifying advance payments can be earlier", () => {
+  const expense = vatExpense({ paymentDate: "2026-06-25", serviceDate: "2026-08-01" });
+  assert.equal(expenseQuarter(expense, 2).totals.kz060, 0);
+  assert.equal(expenseQuarter(expense, 3).totals.kz060, 200);
+  const advance = { ...expense, prepayment: true };
+  assert.equal(expenseQuarter(advance, 2).totals.kz060, 200);
+  assert.equal(expenseQuarter(advance, 3).totals.kz060, 0);
+});
+
+test("two partial gross payments split KZ 060 between Q2 and Q3", () => {
+  const expense = vatExpense({
+    paymentDate: "",
+    payments: [
+      { date: "2026-06-25", gross: 600 },
+      { date: "2026-07-05", gross: 600 },
+    ],
+  });
+  assert.deepEqual(domesticVatAllocations(expense), [
+    { date: "2026-06-25", vat: 100 },
+    { date: "2026-07-05", vat: 100 },
+  ]);
+  assert.equal(expenseQuarter(expense, 2).totals.kz060, 100);
+  assert.equal(expenseQuarter(expense, 3).totals.kz060, 100);
+  assert.equal(expenseQuarter(expense, 4).totals.kz060, 0);
+  assert.equal(expenseRelevantInPeriod(expense, "2026-07-01", "2026-09-30"), true);
+});
+
+test("a partially paid invoice only deducts its paid share", () => {
+  const expense = vatExpense({ payments: [{ date: "2026-07-05", gross: 300 }], paymentDate: "" });
+  assert.equal(expenseQuarter(expense, 3).totals.kz060, 50);
+  assert.equal(expenseQuarter(expense, 2).totals.kz060, 0);
+});
+
+test("payment before invoice is recognized no earlier than invoice readiness", () => {
+  const expense = vatExpense({ date: "2026-07-03", paymentDate: "2026-06-28", serviceDate: "2026-09-15", prepayment: true });
+  assert.equal(expenseQuarter(expense, 2).totals.kz060, 0);
+  assert.equal(expenseQuarter(expense, 3).totals.kz060, 200);
+});
+
+test("missing, impossible, and excessive payment records never create KZ 060", () => {
+  for (const expense of [
+    vatExpense({ paymentDate: "" }),
+    vatExpense({ paymentDate: "", payments: [{ date: "2026-07-05", gross: 1500 }] }),
+    vatExpense({ paymentDate: "", payments: [{ date: "", gross: 500 }] }),
+    vatExpense({ paymentDate: "", payments: [{ date: "2026-07-05", gross: -1 }] }),
+  ]) {
+    assert.ok(domesticVatIssues(expense).length > 0);
+    assert.equal(expenseQuarter(expense, 2).totals.kz060, 0);
+    assert.equal(expenseQuarter(expense, 3).totals.kz060, 0);
+    assert.ok(expenseQuarter(expense, 2).blockers.length > 0);
+  }
+});
+
+test("editing partial payments invalidates old and new payment quarters", () => {
+  const before = vatExpense({ paymentDate: "", payments: [{ date: "2026-07-05", gross: 600 }] });
+  const after = { ...before, payments: [{ date: "2026-10-02", gross: 600 }] };
+  assert.deepEqual(expenseAffectedPeriods(before, after).sort(), ["2026-Q2", "2026-Q3", "2026-Q4"]);
+});
+
+test("reverse charge remains in Steuerdatum quarter despite later payment", () => {
+  const expense = vatExpense({ vatCase: "reverse_charge", vat: 0, net: 100 });
+  assert.equal(expenseQuarter(expense, 2).totals.kz057, 20);
+  assert.equal(expenseQuarter(expense, 2).totals.kz066, 20);
+  assert.equal(expenseQuarter(expense, 3).totals.kz057, 0);
 });
