@@ -61,6 +61,7 @@ export default function CalculationWizard() {
     values,
     rows,
     filingBlockers,
+    quarterNotes,
     clearEdits,
     setValues,
     setRows,
@@ -166,7 +167,9 @@ export default function CalculationWizard() {
       id,
       title: "Weitere Ausgabe",
       date: from,
-      paymentDate: "",
+      // Manual entries default to paid on invoice date; imported invoices keep
+      // their documented payment state and must never be auto-marked paid.
+      paymentDate: from,
       serviceDate: from,
       net: 0,
       vat: 0,
@@ -510,7 +513,7 @@ export default function CalculationWizard() {
             </button>
           )}
           {expenses.length > 0 && <button className="secondaryBtn danger" disabled={busy} onClick={() => {
-            if (!window.confirm(`Alle ${expenses.length} Ausgaben in Q${quarter}/${year} löschen? Originaldateien und API-Zugänge bleiben erhalten.`)) return;
+            if (!window.confirm(`Alle ${expenses.length} Ausgaben in Q${quarter}/${year} löschen? Das entfernt auch Belege mit Rechnungsdatum in einem anderen Quartal, deren Vorsteuer hier wirksam wird. Originaldateien und API-Zugänge bleiben erhalten.`)) return;
             setBusy(true);
             void deleteQuarterExpenses().catch(() => alert("Ausgaben konnten nicht vollständig gelöscht werden.")).finally(() => setBusy(false));
           }}>Alle Ausgaben dieses Quartals löschen</button>}
@@ -634,6 +637,14 @@ export default function CalculationWizard() {
               </p>
             )}
           </div>
+          {quarterNotes.length > 0 && (
+            <div className="filingNotes">
+              <h3>Hinweise zur Quartalszuordnung</h3>
+              <ul>
+                {quarterNotes.map((note) => <li key={note}>{note}</li>)}
+              </ul>
+            </div>
+          )}
           <label className="checkLine">
             <input
               type="checkbox"
