@@ -431,6 +431,16 @@ export type ExpenseDraft = {
   excluded?: boolean;
   note: string;
 };
+/** Manually added expenses start with equal invoice and payment dates by default.
+ * This is an editable convenience, never proof of payment or an import rule. */
+export function newManualExpense(id: string, date: string): ExpenseDraft {
+  return {
+    id, title: "Weitere Ausgabe", sourceName: "Manuell",
+    date, paymentDate: date, serviceDate: date,
+    net: 0, vat: 0, share: 100, vatCase: "review",
+    confirmed: false, note: "",
+  };
+}
 export function withPaymentDateMatchingTaxDate(expense: ExpenseDraft, matches: boolean): ExpenseDraft {
   return { ...expense, payments: undefined, paymentDate: matches ? expense.date : "", confirmed: false };
 }
